@@ -3,16 +3,16 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Install dependencies
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY main.py .
-COPY template_engine.py .
-COPY brand_guide.json .
+COPY backend/main.py .
+COPY backend/template_engine.py .
+COPY backend/brand_guide.json .
 
 # Copy the master template
-COPY templates/ templates/
+COPY backend/templates/ templates/
 
 EXPOSE 8000
 
