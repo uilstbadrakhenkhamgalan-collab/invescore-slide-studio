@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+# Temp / test outputs
+training/test_output*.pptx
+training/assets/
+*.tmp
+
+# Helper scripts (not needed in prod)
+extract_template.py
+build_brand_guide.py
+inspect_slides.py
+test_engine.py
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
