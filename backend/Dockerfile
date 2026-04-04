@@ -2,17 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application files
 COPY backend/main.py .
 COPY backend/template_engine.py .
 COPY backend/brand_guide.json .
-
-# Copy the master template
 COPY backend/templates/ templates/
 
-# Use shell form so $PORT environment variable is expanded at runtime
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD ["python", "-c", "import os,uvicorn; uvicorn.run('main:app', host='0.0.0.0', port=int(os.environ.get('PORT', 8000)))"]
