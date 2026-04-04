@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600&family=JetBrains+Mono:wght@400&display=swap');
 @import "tailwindcss";
 
 *, *::before, *::after {
@@ -8,15 +8,15 @@
 }
 
 html {
-  background: #080B16;
-  color: #E8EAF0;
+  background: #FAFAFA;
+  color: #1A1A1A;
   font-family: 'Montserrat', sans-serif;
   scrollbar-width: thin;
-  scrollbar-color: #1A1F35 transparent;
+  scrollbar-color: #E0E0E0 #FAFAFA;
 }
 
 body {
-  background: #080B16;
+  background: #FAFAFA;
   min-height: 100vh;
   font-family: 'Montserrat', sans-serif;
 }
@@ -25,15 +25,15 @@ body {
   width: 4px;
 }
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: #FAFAFA;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1A1F35;
-  border-radius: 2px;
+  background: #E0E0E0;
+  border-radius: 0;
 }
 
 ::selection {
-  background: rgba(200, 16, 46, 0.3);
+  background: rgba(200, 16, 46, 0.15);
 }
 
 input, textarea, button {
@@ -41,12 +41,7 @@ input, textarea, button {
   outline: none;
 }
 
-@keyframes pulse-arrow {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }

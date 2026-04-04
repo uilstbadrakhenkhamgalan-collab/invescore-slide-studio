@@ -116,7 +116,7 @@ export default function HomePage() {
     }
   }, []);
 
-  // ── Start conversation (with optional first user message) ───────────────────
+  // ── Start conversation ──────────────────────────────────────────────────────
   const startConversation = useCallback(async (initialMsg?: string) => {
     setIntakeData(null);
     setChatMessages([]);
@@ -265,96 +265,39 @@ export default function HomePage() {
   const showProgress = step !== 'idle' && step !== 'error';
 
   return (
-    <div
-      className="page-col"
-      style={{
-        background: '#080B16',
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        padding: '80px 60px 0',
-        fontFamily: "'Montserrat', sans-serif",
-      }}
-    >
+    <div style={{
+      background: '#FAFAFA',
+      minHeight: '100vh',
+      fontFamily: "'Montserrat', sans-serif",
+      padding: '60px 24px 0',
+    }}>
       <style>{`
-        @media (max-width: 768px) {
-          .page-col { padding: 40px 24px 0 !important; }
-          .logo-img { max-width: 140px !important; }
-          .page-title { font-size: 26px !important; }
-          .btn-primary, .btn-download { padding: 16px 0 !important; }
-          .chat-container { min-height: 320px !important; max-height: 420px !important; }
-        }
-        .btn-primary {
-          transition: all 180ms ease;
-        }
-        .btn-primary:not(:disabled):hover {
-          background: #D91636 !important;
-          transform: translateY(-1px);
-          box-shadow: 0 4px 20px rgba(200, 16, 46, 0.25);
-        }
-        .btn-primary:not(:disabled):active {
-          transform: translateY(0);
-          box-shadow: none;
-        }
-        .btn-ghost {
-          transition: all 180ms ease;
-        }
-        .btn-ghost:hover {
-          border-color: #4A5170 !important;
-          color: #E8EAF0 !important;
-        }
-        .btn-download {
-          transition: all 180ms ease;
-        }
-        .btn-download:hover {
-          background: rgba(200, 16, 46, 0.06) !important;
-          border-color: #D91636 !important;
-        }
-        .input-field {
-          transition: border-color 180ms ease, box-shadow 180ms ease;
-        }
+        /* Input focus */
         .input-field:focus {
-          border-color: rgba(200, 16, 46, 0.4) !important;
-          box-shadow: 0 0 0 3px rgba(200, 16, 46, 0.08) !important;
+          border-color: #1A1A1A !important;
+          box-shadow: none !important;
           outline: none;
         }
-        .example-item {
-          transition: color 200ms ease;
-        }
-        .example-item:hover {
-          color: #C8102E !important;
-        }
-        .example-item:hover .example-arrow {
-          color: #C8102E !important;
-        }
-        @keyframes pulse-arrow {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.5; }
-        }
-        @keyframes fade-in {
-          from { opacity: 0; transform: translateY(6px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes msg-fade-in {
-          from { opacity: 0; transform: translateY(4px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes typing-dot {
-          0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
-          30% { opacity: 1; transform: translateY(-3px); }
-        }
-        .progress-section { animation: fade-in 300ms ease forwards; }
-        .plan-section { animation: fade-in 300ms ease forwards; }
-        .download-section { animation: fade-in 300ms ease forwards; }
-        .active-arrow { animation: pulse-arrow 1.5s ease infinite; display: inline-block; }
-        /* Chat */
+        /* Buttons */
+        .btn-primary { transition: background 200ms ease; }
+        .btn-primary:not(:disabled):hover { background: #B00D27 !important; }
+        .btn-ghost { transition: color 150ms ease; }
+        .btn-ghost:hover { color: #1A1A1A !important; }
+        .btn-download { transition: background 200ms ease, color 200ms ease; }
+        .btn-download:hover { background: #1A1A1A !important; color: #FFFFFF !important; }
+        /* Example prompts */
+        .example-item { transition: color 150ms ease; }
+        .example-item:hover { color: #1A1A1A !important; }
+        /* Fade-in */
+        @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+        .progress-section { animation: fade-in 200ms ease forwards; }
+        .plan-section { animation: fade-in 200ms ease forwards; }
+        .download-section { animation: fade-in 200ms ease forwards; }
+        /* Chat container */
         .chat-container {
-          background: #0E1225;
-          border: 1px solid #1A1F35;
-          border-radius: 8px;
-          min-height: 400px;
-          max-height: 500px;
+          background: #FFFFFF;
+          border: 1px solid #EBEBEB;
+          max-height: 480px;
           display: flex;
           flex-direction: column;
           overflow: hidden;
@@ -362,231 +305,216 @@ export default function HomePage() {
         .chat-messages {
           flex: 1;
           overflow-y: auto;
-          padding: 20px 20px 12px;
-          scroll-behavior: smooth;
+          padding: 28px 24px 16px;
+          scrollbar-width: thin;
+          scrollbar-color: #E0E0E0 transparent;
         }
-        .chat-messages::-webkit-scrollbar { width: 4px; }
+        .chat-messages::-webkit-scrollbar { width: 3px; }
         .chat-messages::-webkit-scrollbar-track { background: transparent; }
-        .chat-messages::-webkit-scrollbar-thumb { background: #1A1F35; border-radius: 2px; }
+        .chat-messages::-webkit-scrollbar-thumb { background: #E0E0E0; }
+        .msg-agent-wrap { display: flex; justify-content: flex-start; }
+        .msg-user-wrap { display: flex; justify-content: flex-end; }
         .msg-agent {
-          display: inline-block;
           max-width: 80%;
-          padding: 12px 16px;
-          background: #121830;
-          border-radius: 12px 12px 12px 4px;
-          margin-bottom: 12px;
-          font-size: 14.5px;
+          margin-bottom: 20px;
+          font-size: 14px;
           font-weight: 400;
-          color: #B0B8D0;
-          line-height: 1.55;
-          animation: msg-fade-in 200ms ease forwards;
+          color: #1A1A1A;
+          line-height: 1.7;
           white-space: pre-wrap;
           word-break: break-word;
-        }
-        .msg-agent-wrap {
-          display: flex;
-          justify-content: flex-start;
-          margin-bottom: 0;
-        }
-        .msg-user-wrap {
-          display: flex;
-          justify-content: flex-end;
-          margin-bottom: 0;
+          animation: fade-in 150ms ease forwards;
         }
         .msg-user {
-          display: inline-block;
           max-width: 70%;
-          padding: 12px 16px;
-          background: rgba(200, 16, 46, 0.12);
-          border: 1px solid rgba(200, 16, 46, 0.2);
-          border-radius: 12px 12px 4px 12px;
-          margin-bottom: 12px;
-          font-size: 14.5px;
+          margin-bottom: 20px;
+          font-size: 14px;
           font-weight: 400;
-          color: #E8EAF0;
-          line-height: 1.55;
+          color: #8C8C8C;
+          line-height: 1.7;
+          text-align: right;
           white-space: pre-wrap;
           word-break: break-word;
         }
         .typing-indicator {
-          display: flex;
-          align-items: center;
-          gap: 5px;
-          padding: 14px 18px;
-          background: #121830;
-          border-radius: 12px 12px 12px 4px;
-          width: fit-content;
-          margin-bottom: 12px;
-          animation: msg-fade-in 200ms ease forwards;
+          font-size: 14px;
+          color: #B5B5B5;
+          margin-bottom: 20px;
+          letter-spacing: 0.06em;
         }
-        .typing-dot {
-          width: 6px;
-          height: 6px;
-          background: #4A5170;
-          border-radius: 50%;
-          display: inline-block;
-        }
-        .typing-dot:nth-child(1) { animation: typing-dot 1.4s ease infinite; }
-        .typing-dot:nth-child(2) { animation: typing-dot 1.4s ease 0.2s infinite; }
-        .typing-dot:nth-child(3) { animation: typing-dot 1.4s ease 0.4s infinite; }
         .chat-input-area {
           display: flex;
           align-items: center;
-          gap: 10px;
-          padding: 12px 16px;
-          background: #0A0E1A;
-          border-top: 1px solid #1A1F35;
+          gap: 12px;
+          padding: 16px;
+          border-top: 1px solid #EBEBEB;
           flex-shrink: 0;
         }
         .chat-input {
           flex: 1;
           background: transparent;
           border: none;
-          color: #E8EAF0;
+          color: #1A1A1A;
           font-family: 'Montserrat', sans-serif;
-          font-size: 14.5px;
+          font-size: 14px;
+          font-weight: 400;
           outline: none;
-          caret-color: #C8102E;
         }
-        .chat-input::placeholder { color: #2A3050; }
-        .chat-input:disabled { opacity: 0.5; }
+        .chat-input::placeholder { color: #CCCCCC; }
+        .chat-input:disabled { opacity: 0.4; }
         .send-btn {
-          width: 40px;
-          height: 40px;
+          width: 36px;
+          height: 36px;
           flex-shrink: 0;
-          border: none;
-          border-radius: 6px;
-          font-size: 16px;
-          font-weight: 700;
+          background: transparent;
+          border: 1px solid #E0E0E0;
+          color: #1A1A1A;
           cursor: pointer;
-          transition: background 180ms ease;
+          font-size: 14px;
+          transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
           display: flex;
           align-items: center;
           justify-content: center;
-          color: #fff;
         }
-        .send-btn:not(:disabled) { background: #C8102E; }
-        .send-btn:not(:disabled):hover { background: #D91636; }
-        .send-btn:disabled { background: #121630; color: #3A4060; cursor: not-allowed; }
-        /* Intake initial state */
+        .send-btn:not(:disabled):hover {
+          background: #1A1A1A;
+          color: #FFFFFF;
+          border-color: #1A1A1A;
+        }
+        .send-btn:disabled { color: #CCCCCC; border-color: #EBEBEB; cursor: not-allowed; }
+        /* Intake initial */
         .intake-initial {
-          background: #0E1225;
-          border: 1px solid #1A1F35;
-          border-radius: 8px;
-          min-height: 200px;
+          background: #FFFFFF;
+          border: 1px solid #EBEBEB;
+          min-height: 360px;
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          gap: 20px;
-          padding: 40px 32px;
-          text-align: center;
+          gap: 24px;
         }
         .intake-start-btn {
-          border: 1px solid #C8102E;
-          color: #C8102E;
+          border: 1px solid #1A1A1A;
+          color: #1A1A1A;
           background: transparent;
-          padding: 12px 32px;
+          padding: 12px 48px;
           font-family: 'Montserrat', sans-serif;
-          font-size: 12px;
-          font-weight: 600;
-          letter-spacing: 0.06em;
+          font-size: 11px;
+          font-weight: 500;
+          letter-spacing: 0.12em;
           text-transform: uppercase;
-          border-radius: 4px;
           cursor: pointer;
-          transition: background 180ms ease;
+          transition: background 200ms ease, color 200ms ease;
         }
-        .intake-start-btn:hover:not(:disabled) { background: rgba(200, 16, 46, 0.08); }
+        .intake-start-btn:hover:not(:disabled) { background: #1A1A1A; color: #FFFFFF; }
         .intake-start-btn:disabled {
-          border-color: #2A3050;
-          color: #2A3050;
+          border-color: #CCCCCC;
+          color: #CCCCCC;
           cursor: not-allowed;
         }
         .textarea-link {
           background: none;
           border: none;
-          color: #3A4060;
+          color: #B5B5B5;
           font-family: 'Montserrat', sans-serif;
           font-size: 12px;
+          font-weight: 400;
           cursor: pointer;
           padding: 0;
-          transition: color 180ms ease;
+          transition: color 150ms ease;
         }
-        .textarea-link:hover { color: #6B7394; }
+        .textarea-link:hover { color: #1A1A1A; }
         .back-link {
           background: none;
           border: none;
-          color: #3A4060;
+          color: #B5B5B5;
           font-family: 'Montserrat', sans-serif;
           font-size: 12px;
+          font-weight: 400;
           cursor: pointer;
           padding: 0;
           margin-bottom: 10px;
           display: block;
           text-align: left;
-          transition: color 180ms ease;
+          transition: color 150ms ease;
         }
-        .back-link:hover { color: #6B7394; }
+        .back-link:hover { color: #1A1A1A; }
         /* Summary card */
         .summary-card {
-          background: #0E1225;
-          border: 1px solid #1A1F35;
-          border-radius: 8px;
+          background: #FFFFFF;
+          border: 1px solid #EBEBEB;
           padding: 28px;
-          animation: fade-in 300ms ease forwards;
+          animation: fade-in 200ms ease forwards;
         }
         .summary-header {
-          font-size: 11px;
-          font-weight: 600;
-          letter-spacing: 0.1em;
+          font-size: 10px;
+          font-weight: 500;
+          letter-spacing: 0.14em;
           text-transform: uppercase;
-          color: #C8102E;
+          color: #B5B5B5;
           margin-bottom: 20px;
         }
         .summary-row {
           display: flex;
           gap: 12px;
-          margin-bottom: 10px;
+          padding: 8px 0;
           align-items: baseline;
         }
         .summary-label {
-          font-size: 11px;
+          font-size: 12px;
           font-weight: 500;
-          color: #4A5170;
-          min-width: 72px;
+          color: #B5B5B5;
+          width: 100px;
           flex-shrink: 0;
           text-transform: uppercase;
-          letter-spacing: 0.06em;
+          letter-spacing: 0.04em;
         }
         .summary-value {
           font-size: 14px;
           font-weight: 400;
-          color: #E8EAF0;
-          line-height: 1.45;
+          color: #1A1A1A;
+          line-height: 1.5;
         }
         .summary-actions {
           display: flex;
-          gap: 12px;
+          align-items: center;
           margin-top: 24px;
+        }
+        /* Mobile */
+        @media (max-width: 768px) {
+          .page-card {
+            margin: 0 !important;
+            padding: 48px 28px !important;
+            box-shadow: none !important;
+            min-height: 100vh;
+          }
+          .logo-img { max-width: 120px !important; }
+          .page-title { font-size: 28px !important; }
+          .chat-container { min-height: 320px !important; max-height: 420px !important; }
         }
       `}</style>
 
-      <div style={{
-        width: '100%',
-        maxWidth: 580,
-        display: 'flex',
-        flexDirection: 'column',
-      }}>
+      {/* ── Content card ── */}
+      <div
+        className="page-card"
+        style={{
+          maxWidth: 560,
+          margin: '0 auto',
+          background: '#FFFFFF',
+          padding: '72px 56px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+        }}
+      >
 
         {/* ── Logo ── */}
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 48 }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 40 }}>
           <Image
             src="/invescore/logo-new.png"
             alt="InvesCore Property"
-            width={200}
-            height={80}
+            width={160}
+            height={64}
             className="logo-img"
-            style={{ objectFit: 'contain', maxWidth: 200 }}
+            style={{ objectFit: 'contain', maxWidth: 160, filter: 'brightness(0)' }}
             priority
           />
         </div>
@@ -596,10 +524,10 @@ export default function HomePage() {
           className="page-title"
           style={{
             textAlign: 'center',
-            fontSize: 32,
-            fontWeight: 700,
-            letterSpacing: '0.16em',
-            color: '#E8EAF0',
+            fontSize: 36,
+            fontWeight: 300,
+            letterSpacing: '0.20em',
+            color: '#1A1A1A',
             textTransform: 'uppercase',
             lineHeight: 1,
           }}
@@ -608,32 +536,32 @@ export default function HomePage() {
         </h1>
 
         {/* ── Red accent line ── */}
-        <div style={{ display: 'flex', justifyContent: 'center', margin: '24px 0' }}>
-          <div style={{ width: 60, height: 2, background: '#C8102E' }} />
+        <div style={{ display: 'flex', justifyContent: 'center', margin: '12px 0' }}>
+          <div style={{ width: 40, height: 1.5, background: '#C8102E' }} />
         </div>
 
         {/* ── Subtitle ── */}
         <p style={{
           textAlign: 'center',
-          fontSize: 13,
+          fontSize: 12,
           fontWeight: 400,
           letterSpacing: '0.06em',
-          color: '#4A5170',
+          color: '#B5B5B5',
           marginBottom: 56,
         }}>
-          InvesCore Property Presentation Generator
+          Presentation Generator
         </p>
 
         {/* ── API Key ── */}
-        <div style={{ marginBottom: 56 }}>
+        <div style={{ marginBottom: 48 }}>
           <label style={{
             display: 'block',
-            fontSize: 11,
+            fontSize: 10,
             fontWeight: 500,
-            letterSpacing: '0.1em',
+            letterSpacing: '0.14em',
             textTransform: 'uppercase',
-            color: '#4A5170',
-            marginBottom: 8,
+            color: '#B5B5B5',
+            marginBottom: 10,
           }}>
             API Key
           </label>
@@ -642,47 +570,43 @@ export default function HomePage() {
             className="input-field"
             value={apiKey}
             onChange={e => setApiKey(e.target.value)}
-            placeholder="sk-ant-api03-..."
+            placeholder="sk-ant-..."
             disabled={isWorking}
             autoComplete="off"
             spellCheck={false}
             style={{
               width: '100%',
-              background: '#0E1225',
-              border: '1px solid #1A1F35',
-              borderRadius: 6,
-              padding: '16px 20px',
-              fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
-              fontSize: 14,
-              color: '#6B7394',
+              background: '#FFFFFF',
+              border: '1px solid #E0E0E0',
+              borderRadius: 0,
+              padding: '14px 18px',
+              fontFamily: "'SF Mono', 'JetBrains Mono', monospace",
+              fontSize: 13,
+              color: '#1A1A1A',
               display: 'block',
               boxSizing: 'border-box',
             }}
           />
           <p style={{
-            marginTop: 10,
-            fontSize: 12,
+            marginTop: 8,
+            fontSize: 11,
             fontWeight: 400,
-            color: '#3A4060',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
+            color: '#B5B5B5',
           }}>
-            <span>🔒</span>
-            Stored locally in your browser. Never sent to our servers.
+            Stored locally. Never sent to our servers.
           </p>
         </div>
 
         {/* ── Describe Your Presentation ── */}
-        <div style={{ marginBottom: 20 }}>
+        <div style={{ marginBottom: 24 }}>
           <label style={{
             display: 'block',
-            fontSize: 11,
+            fontSize: 10,
             fontWeight: 500,
-            letterSpacing: '0.1em',
+            letterSpacing: '0.14em',
             textTransform: 'uppercase',
-            color: '#4A5170',
-            marginBottom: 8,
+            color: '#B5B5B5',
+            marginBottom: 10,
           }}>
             Describe Your Presentation
           </label>
@@ -690,8 +614,14 @@ export default function HomePage() {
           {/* ── State 1: Initial ── */}
           {intakeMode === 'initial' && (
             <div className="intake-initial">
-              <p style={{ fontSize: 14, color: '#6B7394', fontWeight: 400, margin: 0 }}>
-                Ready to build your deck?
+              <p style={{
+                fontSize: 20,
+                fontWeight: 300,
+                color: '#1A1A1A',
+                textAlign: 'center',
+                margin: 0,
+              }}>
+                What would you like to create?
               </p>
               <button
                 className="intake-start-btn"
@@ -699,13 +629,13 @@ export default function HomePage() {
                 disabled={!hasApiKey || isWorking}
                 title={!hasApiKey ? 'Enter your API key above to begin' : undefined}
               >
-                Start Conversation
+                Begin
               </button>
               <button
                 className="textarea-link"
                 onClick={() => setIntakeMode('textarea')}
               >
-                or paste a detailed brief below
+                or write a detailed brief
               </button>
             </div>
           )}
@@ -723,11 +653,7 @@ export default function HomePage() {
                 ))}
                 {isTyping && (
                   <div className="msg-agent-wrap">
-                    <div className="typing-indicator">
-                      <span className="typing-dot" />
-                      <span className="typing-dot" />
-                      <span className="typing-dot" />
-                    </div>
+                    <div className="typing-indicator">...</div>
                   </div>
                 )}
                 <div ref={chatEndRef} />
@@ -739,7 +665,7 @@ export default function HomePage() {
                   value={chatInput}
                   onChange={e => setChatInput(e.target.value)}
                   onKeyDown={handleChatKeyDown}
-                  placeholder="Type your answer..."
+                  placeholder="Type here..."
                   disabled={isTyping || isWorking}
                   autoComplete="off"
                 />
@@ -758,7 +684,7 @@ export default function HomePage() {
           {/* ── State 3: Intake complete — summary card ── */}
           {intakeMode === 'complete' && intakeData && (
             <div className="summary-card">
-              <div className="summary-header">Presentation Brief</div>
+              <div className="summary-header">Brief</div>
               {[
                 ['Topic', intakeData.topic],
                 ['Audience', intakeData.audience],
@@ -783,42 +709,39 @@ export default function HomePage() {
                   onClick={handleGenerateFromIntake}
                   disabled={!canGenerateFromIntake}
                   style={{
-                    flex: 1,
-                    padding: '18px 0',
-                    background: canGenerateFromIntake ? '#C8102E' : '#121630',
+                    padding: '14px 40px',
+                    background: canGenerateFromIntake ? '#C8102E' : '#EBEBEB',
                     border: 'none',
-                    borderRadius: 4,
-                    fontSize: 13,
-                    fontWeight: 600,
-                    letterSpacing: '0.08em',
+                    borderRadius: 0,
+                    fontSize: 12,
+                    fontWeight: 500,
+                    letterSpacing: '0.10em',
                     textTransform: 'uppercase',
-                    color: canGenerateFromIntake ? '#FFFFFF' : '#3A4060',
+                    color: canGenerateFromIntake ? '#FFFFFF' : '#B5B5B5',
                     cursor: canGenerateFromIntake ? 'pointer' : 'not-allowed',
                     fontFamily: "'Montserrat', sans-serif",
                   }}
                 >
-                  {isWorking ? 'Generating...' : 'Generate Presentation'}
+                  {isWorking ? 'Generating...' : 'Generate'}
                 </button>
                 <button
-                  className="btn-ghost"
                   onClick={handleStartOver}
                   disabled={isWorking}
                   style={{
-                    flex: 1,
-                    padding: '18px 0',
                     background: 'transparent',
-                    border: '1px solid #1A1F35',
-                    borderRadius: 4,
-                    fontSize: 13,
-                    fontWeight: 600,
-                    letterSpacing: '0.08em',
-                    textTransform: 'uppercase',
-                    color: '#6B7394',
+                    border: 'none',
+                    padding: '14px 24px',
+                    fontSize: 12,
+                    fontWeight: 400,
+                    color: '#B5B5B5',
                     cursor: isWorking ? 'not-allowed' : 'pointer',
                     fontFamily: "'Montserrat', sans-serif",
+                    transition: 'color 150ms ease',
                   }}
+                  onMouseEnter={e => (e.currentTarget.style.color = '#1A1A1A')}
+                  onMouseLeave={e => (e.currentTarget.style.color = '#B5B5B5')}
                 >
-                  Start Over
+                  Start over
                 </button>
               </div>
             </div>
@@ -828,27 +751,27 @@ export default function HomePage() {
           {intakeMode === 'textarea' && (
             <>
               <button className="back-link" onClick={() => setIntakeMode('initial')}>
-                ← Back to guided mode
+                Back to guided mode
               </button>
               <textarea
                 ref={textareaRef}
                 className="input-field"
                 value={prompt}
                 onChange={e => setPrompt(e.target.value)}
-                placeholder="What presentation do you need?"
+                placeholder="Describe the presentation you need..."
                 disabled={isWorking}
                 rows={5}
                 style={{
                   width: '100%',
                   minHeight: 160,
-                  background: '#0E1225',
-                  border: '1px solid #1A1F35',
-                  borderRadius: 6,
-                  padding: '16px 20px',
+                  background: '#FFFFFF',
+                  border: '1px solid #E0E0E0',
+                  borderRadius: 0,
+                  padding: '14px 18px',
                   fontFamily: "'Montserrat', sans-serif",
-                  fontSize: 15,
-                  color: '#E8EAF0',
-                  lineHeight: 1.6,
+                  fontSize: 14,
+                  color: '#1A1A1A',
+                  lineHeight: 1.7,
                   resize: 'vertical',
                   display: 'block',
                   boxSizing: 'border-box',
@@ -859,77 +782,72 @@ export default function HomePage() {
         </div>
 
         {/* ── Example prompts ── */}
-        <div style={{ marginBottom: 56 }}>
+        <div style={{ marginBottom: 48 }}>
           {EXAMPLES.map((ex, i) => (
             <button
               key={i}
               className="example-item"
               onClick={() => handleExample(ex)}
               style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 10,
+                display: 'block',
                 background: 'none',
                 border: 'none',
                 cursor: isWorking ? 'default' : 'pointer',
-                padding: '5px 0',
+                padding: '6px 0',
                 textAlign: 'left',
                 width: '100%',
-                color: '#4A5170',
-                fontSize: 13.5,
+                color: '#B5B5B5',
+                fontSize: 13,
                 fontWeight: 400,
                 lineHeight: 1.5,
+                fontFamily: "'Montserrat', sans-serif",
               }}
             >
-              <span className="example-arrow" style={{ color: '#2A3050', flexShrink: 0, marginTop: 1 }}>→</span>
-              <span>{ex}</span>
+              {ex}
             </button>
           ))}
         </div>
 
-        {/* ── Separator + Generate button — textarea mode only ── */}
-        {intakeMode === 'textarea' && (
+        {/* ── Generate button — textarea mode only ── */}
+        {intakeMode === 'textarea' && (step === 'idle' || step === 'error') && (
           <>
-            <div style={{ borderTop: '1px solid #121630', marginBottom: 40 }} />
-            {(step === 'idle' || step === 'error') && (
-              <button
-                className="btn-primary"
-                onClick={() => handleGenerate()}
-                disabled={!canGenerateFromTextarea}
-                style={{
-                  width: '100%',
-                  padding: '18px 0',
-                  background: canGenerateFromTextarea ? '#C8102E' : '#121630',
-                  border: 'none',
-                  borderRadius: 4,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  letterSpacing: '0.08em',
-                  textTransform: 'uppercase',
-                  color: canGenerateFromTextarea ? '#FFFFFF' : '#3A4060',
-                  cursor: canGenerateFromTextarea ? 'pointer' : 'not-allowed',
-                  fontFamily: "'Montserrat', sans-serif",
-                }}
-              >
-                Generate Presentation
-              </button>
-            )}
+            <div style={{ borderTop: '1px solid #EBEBEB', marginBottom: 40 }} />
+            <button
+              className="btn-primary"
+              onClick={() => handleGenerate()}
+              disabled={!canGenerateFromTextarea}
+              style={{
+                width: '100%',
+                padding: '16px 0',
+                background: canGenerateFromTextarea ? '#C8102E' : '#EBEBEB',
+                border: 'none',
+                borderRadius: 0,
+                fontSize: 12,
+                fontWeight: 500,
+                letterSpacing: '0.10em',
+                textTransform: 'uppercase',
+                color: canGenerateFromTextarea ? '#FFFFFF' : '#B5B5B5',
+                cursor: canGenerateFromTextarea ? 'pointer' : 'not-allowed',
+                fontFamily: "'Montserrat', sans-serif",
+              }}
+            >
+              Generate Presentation
+            </button>
           </>
         )}
 
         {/* ── Error ── */}
         {error && (
           <div style={{
-            marginTop: 20,
-            background: 'rgba(200, 16, 46, 0.06)',
-            border: '1px solid rgba(200, 16, 46, 0.2)',
-            borderRadius: 6,
+            marginTop: 24,
+            border: '1px solid rgba(200,16,46,0.2)',
             padding: '14px 18px',
             fontSize: 13,
-            color: '#E8EAF0',
-            lineHeight: 1.5,
+            color: '#1A1A1A',
+            lineHeight: 1.6,
+            background: 'rgba(200,16,46,0.03)',
           }}>
-            <strong style={{ color: '#C8102E' }}>Error: </strong>{error}
+            <span style={{ color: '#C8102E', fontWeight: 500 }}>Error: </span>{error}
           </div>
         )}
 
@@ -942,24 +860,23 @@ export default function HomePage() {
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 12,
-                  marginBottom: i < progressItems.length - 1 ? 12 : 0,
+                  gap: 10,
+                  marginBottom: i < progressItems.length - 1 ? 10 : 0,
                 }}
               >
                 <span style={{
-                  fontSize: 15,
-                  width: 18,
+                  fontSize: 12,
+                  width: 16,
                   flexShrink: 0,
-                  color: item.state === 'done' ? '#22C55E' : item.state === 'active' ? '#C8102E' : '#2A3050',
-                  ...(item.state === 'active' ? { animation: 'pulse-arrow 1.5s ease infinite' } : {}),
+                  color: item.state === 'done' ? '#1A1A1A' : item.state === 'active' ? '#C8102E' : '#CCCCCC',
                   display: 'inline-block',
                 }}>
-                  {item.state === 'done' ? '✓' : item.state === 'active' ? '→' : '○'}
+                  {item.state === 'done' ? '✓' : item.state === 'active' ? '·' : '○'}
                 </span>
                 <span style={{
-                  fontSize: 14,
-                  fontWeight: item.state === 'active' ? 500 : 400,
-                  color: item.state === 'active' ? '#E8EAF0' : item.state === 'done' ? '#6B7394' : '#3A4060',
+                  fontSize: 13,
+                  fontWeight: 400,
+                  color: item.state === 'done' ? '#1A1A1A' : item.state === 'active' ? '#C8102E' : '#CCCCCC',
                 }}>
                   {item.label}
                 </span>
@@ -972,9 +889,8 @@ export default function HomePage() {
         {(step === 'plan_ready' || step === 'building' || step === 'done') && plan && (
           <div className="plan-section" style={{ marginTop: 40 }}>
             <div style={{
-              background: '#0E1225',
-              border: '1px solid #1A1F35',
-              borderRadius: 8,
+              background: '#FFFFFF',
+              border: '1px solid #EBEBEB',
               padding: 32,
             }}>
               {(() => {
@@ -1003,9 +919,9 @@ export default function HomePage() {
                 return groups.map((group, gi) => (
                   <div key={gi} style={{ marginBottom: gi < groups.length - 1 ? 24 : 0 }}>
                     <div style={{
-                      fontSize: 12,
-                      fontWeight: 600,
-                      letterSpacing: '0.08em',
+                      fontSize: 10,
+                      fontWeight: 500,
+                      letterSpacing: '0.12em',
                       textTransform: 'uppercase',
                       color: '#C8102E',
                       marginBottom: 10,
@@ -1019,18 +935,18 @@ export default function HomePage() {
                           display: 'flex',
                           alignItems: 'center',
                           gap: 10,
-                          paddingLeft: 20,
+                          paddingLeft: 16,
                           marginBottom: si < group.slides.length - 1 ? 8 : 0,
                         }}
                       >
                         <span style={{
-                          width: 4,
-                          height: 4,
-                          background: '#1A1F35',
+                          width: 3,
+                          height: 3,
+                          background: '#CCCCCC',
                           flexShrink: 0,
                           display: 'inline-block',
                         }} />
-                        <span style={{ fontSize: 14, fontWeight: 400, color: '#6B7394', lineHeight: 1.4 }}>
+                        <span style={{ fontSize: 13, fontWeight: 400, color: '#8C8C8C', lineHeight: 1.5 }}>
                           {s.label}
                         </span>
                       </div>
@@ -1047,13 +963,13 @@ export default function HomePage() {
                   onClick={handleBuildFromPlan}
                   style={{
                     flex: 1,
-                    padding: '18px 0',
+                    padding: '16px 0',
                     background: '#C8102E',
                     border: 'none',
-                    borderRadius: 4,
-                    fontSize: 13,
-                    fontWeight: 600,
-                    letterSpacing: '0.08em',
+                    borderRadius: 0,
+                    fontSize: 12,
+                    fontWeight: 500,
+                    letterSpacing: '0.10em',
                     textTransform: 'uppercase',
                     color: '#FFFFFF',
                     cursor: 'pointer',
@@ -1067,20 +983,20 @@ export default function HomePage() {
                   onClick={handleReset}
                   style={{
                     flex: 1,
-                    padding: '18px 0',
+                    padding: '16px 0',
                     background: 'transparent',
-                    border: '1px solid #1A1F35',
-                    borderRadius: 4,
-                    fontSize: 13,
-                    fontWeight: 600,
-                    letterSpacing: '0.08em',
+                    border: '1px solid #EBEBEB',
+                    borderRadius: 0,
+                    fontSize: 12,
+                    fontWeight: 400,
+                    letterSpacing: '0.10em',
                     textTransform: 'uppercase',
-                    color: '#6B7394',
+                    color: '#B5B5B5',
                     cursor: 'pointer',
                     fontFamily: "'Montserrat', sans-serif",
                   }}
                 >
-                  Regenerate Plan
+                  Regenerate
                 </button>
               </div>
             )}
@@ -1089,38 +1005,37 @@ export default function HomePage() {
 
         {/* ── Download ── */}
         {step === 'done' && downloadUrl && (
-          <div className="download-section" style={{ marginTop: 40 }}>
+          <div className="download-section" style={{ marginTop: 48 }}>
             <a href={downloadUrl} download={downloadFilename} style={{ textDecoration: 'none', display: 'block' }}>
               <button
                 className="btn-download"
                 style={{
                   width: '100%',
-                  padding: '18px 0',
-                  background: 'transparent',
-                  border: '1.5px solid #C8102E',
-                  borderRadius: 4,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  letterSpacing: '0.06em',
+                  padding: '16px 0',
+                  background: '#FFFFFF',
+                  border: '1.5px solid #1A1A1A',
+                  borderRadius: 0,
+                  fontSize: 12,
+                  fontWeight: 500,
+                  letterSpacing: '0.10em',
                   textTransform: 'uppercase',
-                  color: '#C8102E',
+                  color: '#1A1A1A',
                   cursor: 'pointer',
                   fontFamily: "'Montserrat', sans-serif",
                 }}
               >
-                ↓&nbsp;&nbsp;Download .pptx
+                Download
               </button>
             </a>
             {tokenUsage && (
               <p style={{
-                marginTop: 12,
-                fontSize: 12,
+                marginTop: 10,
+                fontSize: 11,
                 fontWeight: 400,
-                color: '#3A4060',
+                color: '#B5B5B5',
                 textAlign: 'center',
               }}>
-                Estimated cost: ~${tokenUsage.estimated_cost_usd.toFixed(4)}{' '}
-                ({(tokenUsage.input_tokens + tokenUsage.output_tokens).toLocaleString()} tokens)
+                ~${tokenUsage.estimated_cost_usd.toFixed(4)} &nbsp;·&nbsp; {(tokenUsage.input_tokens + tokenUsage.output_tokens).toLocaleString()} tokens
               </p>
             )}
             <button
@@ -1131,13 +1046,13 @@ export default function HomePage() {
                 width: '100%',
                 padding: '14px 0',
                 background: 'transparent',
-                border: '1px solid #1A1F35',
-                borderRadius: 4,
-                fontSize: 13,
-                fontWeight: 600,
-                letterSpacing: '0.08em',
+                border: '1px solid #EBEBEB',
+                borderRadius: 0,
+                fontSize: 12,
+                fontWeight: 400,
+                letterSpacing: '0.10em',
                 textTransform: 'uppercase',
-                color: '#6B7394',
+                color: '#B5B5B5',
                 cursor: 'pointer',
                 fontFamily: "'Montserrat', sans-serif",
               }}
@@ -1148,26 +1063,17 @@ export default function HomePage() {
         )}
 
         {/* ── Footer ── */}
-        <div style={{ marginTop: 80, paddingBottom: 40 }}>
-          <div style={{ borderTop: '1px solid #121630', marginBottom: 24 }} />
+        <div style={{ marginTop: 64, paddingBottom: 32 }}>
+          <div style={{ borderTop: '1px solid #EBEBEB', marginBottom: 20 }} />
           <p style={{
             textAlign: 'center',
-            fontSize: 10,
+            fontSize: 9,
             fontWeight: 500,
-            letterSpacing: '0.12em',
+            letterSpacing: '0.16em',
             textTransform: 'uppercase',
-            color: '#2A3050',
-            marginBottom: 8,
+            color: '#CCCCCC',
           }}>
-            InvesCore Property Research
-          </p>
-          <p style={{
-            textAlign: 'center',
-            fontSize: 10,
-            fontWeight: 400,
-            color: '#1A1F35',
-          }}>
-            Powered by Claude AI
+            InvesCore Property
           </p>
         </div>
 
