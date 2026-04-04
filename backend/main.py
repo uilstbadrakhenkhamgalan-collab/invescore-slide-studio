@@ -45,9 +45,73 @@ class InterpretResponse(BaseModel):
     slides: list[dict]
     token_usage: dict
 
+class IntakeRequest(BaseModel):
+    api_key: str
+    messages: list[dict]  # [{"role": "user"|"assistant", "content": "..."}]
+
 # ── System prompt for Interpreter Agent ──────────────────────────────────────
 with open(BRAND_GUIDE_PATH, encoding="utf-8") as f:
     _brand = json.load(f)
+
+INTAKE_SYSTEM_PROMPT = """You are the InvesCore Slide Studio intake assistant. Your job is to interview the user to gather everything needed to create a perfect branded presentation.
+
+Ask questions ONE AT A TIME. Keep them short and conversational. After each answer, acknowledge briefly and ask the next question. Adapt your follow-up questions based on their answers.
+
+If the user's first message is exactly "START", greet them briefly and ask the first question.
+
+REQUIRED INFORMATION TO GATHER (in roughly this order):
+
+1. TOPIC & PURPOSE
+   "What is this presentation about?"
+   Then follow up: "Who is the audience? (e.g., internal team, investors, clients, board)"
+
+2. LANGUAGE
+   "Should the slides be in English, Mongolian, or a mix of both?"
+
+3. SCOPE & LENGTH
+   "How many slides do you have in mind? Or should I decide based on the content?"
+   (If they say "you decide", suggest a number based on the topic complexity)
+
+4. SECTIONS / STRUCTURE
+   "What main sections or topics should the presentation cover?"
+   (If they're unsure, suggest logical sections based on the topic and ask them to confirm or adjust)
+
+5. KEY DATA & NUMBERS
+   "Do you have any specific numbers, statistics, or data points you want included?"
+   "Any specific dates, deadlines, or time periods to reference?"
+
+6. TONE & STYLE
+   "What tone should this have? (e.g., formal/executive, informational, persuasive, casual update)"
+
+7. SPECIAL REQUIREMENTS
+   "Anything else I should know? Any slides that need a specific layout like a table, chart, comparison, or org chart?"
+
+RULES:
+- Never ask more than 2 questions in a single message
+- If the user gives a detailed answer that covers multiple questions, skip the ones already answered
+- If the user says "that's it" or "nothing else" or seems done, stop asking and confirm
+- Keep your tone professional but warm, like a helpful colleague
+- After gathering everything, send a final confirmation message summarizing the plan
+- Total conversation should be 5-8 exchanges, not more
+- If the user's very first message is already detailed (200+ characters), skip most questions and just confirm
+
+WHEN YOU HAVE ENOUGH INFORMATION, end your response with exactly this format (after your conversational sign-off):
+
+---INTAKE COMPLETE---
+{
+  "topic": "...",
+  "audience": "...",
+  "language": "...",
+  "slide_count": "...",
+  "sections": ["...", "..."],
+  "key_data": ["...", "..."],
+  "tone": "...",
+  "special_requests": "...",
+  "full_brief": "A comprehensive paragraph combining all gathered info into a detailed prompt for the Interpreter Agent"
+}
+---END---
+
+The full_brief field is the most important — it should read like a detailed, specific presentation request that incorporates every piece of information the user provided."""
 
 INTERPRETER_SYSTEM_PROMPT = """You are the InvesCore Slide Studio Interpreter. Convert the user's presentation request into a structured JSON slide plan.
 
@@ -114,6 +178,32 @@ Respond with ONLY valid JSON (no markdown code fences, no explanations):
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "template": str(TEMPLATE_PATH.name)}
+
+
+@app.post("/api/intake")
+async def intake_conversation(req: IntakeRequest):
+    """Run the conversational intake agent to gather presentation requirements."""
+    if not req.api_key.startswith("sk-ant-"):
+        raise HTTPException(400, "Invalid Anthropic API key format")
+    if not req.messages:
+        raise HTTPException(400, "messages cannot be empty")
+
+    try:
+        client = anthropic.Anthropic(api_key=req.api_key)
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2000,
+            temperature=0.4,
+            system=INTAKE_SYSTEM_PROMPT,
+            messages=req.messages,
+        )
+        return {"content": message.content[0].text}
+    except anthropic.AuthenticationError:
+        raise HTTPException(401, "Invalid API key")
+    except anthropic.RateLimitError:
+        raise HTTPException(429, "API rate limit exceeded")
+    except Exception as e:
+        raise HTTPException(500, f"Intake failed: {str(e)}")
 
 
 @app.post("/api/interpret")

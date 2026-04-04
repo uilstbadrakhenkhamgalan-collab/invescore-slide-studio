@@ -1,8 +1,11 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import Image from 'next/image';
-import type { SlideSpec, SlidePlan, Step, TokenUsage } from '@/lib/types';
+import type {
+  SlideSpec, SlidePlan, Step, TokenUsage,
+  ChatMessage, IntakeData, IntakeMode,
+} from '@/lib/types';
 import { BACKEND_URL, TEMPLATE_CATEGORIES } from '@/lib/constants';
 
 // ── Example prompts ────────────────────────────────────────────────────────────
@@ -38,6 +41,7 @@ function buildProgress(step: Step, slideCount?: number): ProgressItem[] {
 
 // ── Component ──────────────────────────────────────────────────────────────────
 export default function HomePage() {
+  // ── Presentation generation state ──────────────────────────────────────────
   const [apiKey, setApiKey] = useState('');
   const [prompt, setPrompt] = useState('');
   const [step, setStep] = useState<Step>('idle');
@@ -48,15 +52,143 @@ export default function HomePage() {
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const canGenerate = apiKey.trim().length > 10 && prompt.trim().length > 5;
-  const isWorking = step === 'interpreting' || step === 'building';
+  // ── Intake / chat state ─────────────────────────────────────────────────────
+  const [intakeMode, setIntakeMode] = useState<IntakeMode>('initial');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [intakeData, setIntakeData] = useState<IntakeData | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
 
-  const doInterpret = useCallback(async (): Promise<SlidePlan | null> => {
+  const hasApiKey = apiKey.trim().length > 10;
+  const isWorking = step === 'interpreting' || step === 'building';
+  const canGenerateFromTextarea = hasApiKey && prompt.trim().length > 5 && !isWorking;
+  const canGenerateFromIntake = hasApiKey && intakeMode === 'complete' && !!intakeData && !isWorking;
+
+  // ── Auto-scroll chat ────────────────────────────────────────────────────────
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages, isTyping]);
+
+  // ── Intake API call ─────────────────────────────────────────────────────────
+  const callIntakeAPI = useCallback(async (messages: ChatMessage[]): Promise<string> => {
+    const apiMessages = messages.map(({ role, content }) => ({ role, content }));
+    const res = await fetch(`${BACKEND_URL}/api/intake`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey.trim(), messages: apiMessages }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { detail?: string }).detail || `Intake failed (${res.status})`);
+    }
+    return ((await res.json()) as { content: string }).content;
+  }, [apiKey]);
+
+  // ── Process intake response — detect completion signal ──────────────────────
+  const processResponse = useCallback((content: string, prevMessages: ChatMessage[]) => {
+    let displayContent = content;
+    let completed = false;
+    let parsed: IntakeData | null = null;
+
+    if (content.includes('---INTAKE COMPLETE---')) {
+      const match = content.match(/---INTAKE COMPLETE---\s*(\{[\s\S]*?\})\s*---END---/);
+      if (match) {
+        try {
+          parsed = JSON.parse(match[1]) as IntakeData;
+          completed = true;
+          displayContent = content.replace(/---INTAKE COMPLETE---[\s\S]*?---END---/g, '').trim();
+          if (!displayContent) {
+            displayContent = "I have everything I need. Here's your presentation brief below.";
+          }
+        } catch {
+          // JSON parse failed — treat as normal message
+        }
+      }
+    }
+
+    setChatMessages([...prevMessages, { role: 'assistant', content, displayContent }]);
+
+    if (completed && parsed) {
+      setIntakeData(parsed);
+      setIntakeMode('complete');
+    }
+  }, []);
+
+  // ── Start conversation (with optional first user message) ───────────────────
+  const startConversation = useCallback(async (initialMsg?: string) => {
+    setIntakeData(null);
+    setChatMessages([]);
+    setChatInput('');
+    setIntakeMode('chat');
+    setIsTyping(true);
+
+    const isHidden = !initialMsg;
+    const firstContent = initialMsg ?? 'START';
+    const messages: ChatMessage[] = [{ role: 'user', content: firstContent, hidden: isHidden }];
+    setChatMessages(messages);
+
+    try {
+      const content = await callIntakeAPI(messages);
+      processResponse(content, messages);
+    } catch {
+      setChatMessages([
+        ...messages,
+        { role: 'assistant', content: "Sorry, I couldn't connect. Please check your API key and try again." },
+      ]);
+    } finally {
+      setIsTyping(false);
+    }
+  }, [callIntakeAPI, processResponse]);
+
+  // ── Send chat message ───────────────────────────────────────────────────────
+  const sendChatMessage = useCallback(async () => {
+    const text = chatInput.trim();
+    if (!text || isTyping) return;
+
+    setChatInput('');
+    const messages: ChatMessage[] = [...chatMessages, { role: 'user', content: text }];
+    setChatMessages(messages);
+    setIsTyping(true);
+
+    try {
+      const content = await callIntakeAPI(messages);
+      processResponse(content, messages);
+    } catch {
+      setChatMessages([
+        ...messages,
+        { role: 'assistant', content: "Sorry, something went wrong. Please try again." },
+      ]);
+    } finally {
+      setIsTyping(false);
+    }
+  }, [chatInput, chatMessages, isTyping, callIntakeAPI, processResponse]);
+
+  const handleChatKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  }, [sendChatMessage]);
+
+  // ── Reset intake ────────────────────────────────────────────────────────────
+  const handleStartOver = useCallback(() => {
+    setIntakeMode('initial');
+    setChatMessages([]);
+    setChatInput('');
+    setIntakeData(null);
+    setIsTyping(false);
+  }, []);
+
+  // ── Presentation generation ─────────────────────────────────────────────────
+  const doInterpret = useCallback(async (promptOverride?: string): Promise<SlidePlan | null> => {
     setStep('interpreting');
+    const actualPrompt = promptOverride ?? prompt.trim();
     const res = await fetch(`${BACKEND_URL}/api/interpret`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: apiKey.trim(), prompt: prompt.trim() }),
+      body: JSON.stringify({ api_key: apiKey.trim(), prompt: actualPrompt }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -89,17 +221,22 @@ export default function HomePage() {
     setStep('done');
   }, [apiKey]);
 
-  const handleGenerate = useCallback(async () => {
-    if (!canGenerate || isWorking) return;
+  const handleGenerate = useCallback(async (promptOverride?: string) => {
+    if (isWorking) return;
     setError(null); setDownloadUrl(null); setPlan(null);
     try {
-      const newPlan = await doInterpret();
+      const newPlan = await doInterpret(promptOverride);
       if (newPlan) await doBuild(newPlan.slides);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Unknown error');
       setStep('error');
     }
-  }, [canGenerate, isWorking, doInterpret, doBuild]);
+  }, [isWorking, doInterpret, doBuild]);
+
+  const handleGenerateFromIntake = useCallback(() => {
+    if (!intakeData) return;
+    handleGenerate(intakeData.full_brief);
+  }, [intakeData, handleGenerate]);
 
   const handleBuildFromPlan = useCallback(async () => {
     if (!plan) return;
@@ -110,34 +247,43 @@ export default function HomePage() {
 
   const handleReset = useCallback(() => {
     setStep('idle'); setPlan(null); setDownloadUrl(null); setError(null);
-  }, []);
+    handleStartOver();
+  }, [handleStartOver]);
 
   const handleExample = useCallback((ex: string) => {
     if (isWorking) return;
-    setPrompt(ex);
-    textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    textareaRef.current?.focus();
-  }, [isWorking]);
+    if (intakeMode === 'textarea') {
+      setPrompt(ex);
+      textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      textareaRef.current?.focus();
+    } else {
+      startConversation(ex);
+    }
+  }, [isWorking, intakeMode, startConversation]);
 
   const progressItems = buildProgress(step, plan?.slides.length);
   const showProgress = step !== 'idle' && step !== 'error';
 
   return (
-    <div style={{
-      background: '#080B16',
-      minHeight: '100vh',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      padding: '80px 60px 0',
-      fontFamily: "'Montserrat', sans-serif",
-    }}>
+    <div
+      className="page-col"
+      style={{
+        background: '#080B16',
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        padding: '80px 60px 0',
+        fontFamily: "'Montserrat', sans-serif",
+      }}
+    >
       <style>{`
         @media (max-width: 768px) {
           .page-col { padding: 40px 24px 0 !important; }
           .logo-img { max-width: 140px !important; }
           .page-title { font-size: 26px !important; }
           .btn-primary, .btn-download { padding: 16px 0 !important; }
+          .chat-container { min-height: 320px !important; max-height: 420px !important; }
         }
         .btn-primary {
           transition: all 180ms ease;
@@ -171,6 +317,7 @@ export default function HomePage() {
         .input-field:focus {
           border-color: rgba(200, 16, 46, 0.4) !important;
           box-shadow: 0 0 0 3px rgba(200, 16, 46, 0.08) !important;
+          outline: none;
         }
         .example-item {
           transition: color 200ms ease;
@@ -189,18 +336,238 @@ export default function HomePage() {
           from { opacity: 0; transform: translateY(6px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        .progress-section {
-          animation: fade-in 300ms ease forwards;
+        @keyframes msg-fade-in {
+          from { opacity: 0; transform: translateY(4px); }
+          to { opacity: 1; transform: translateY(0); }
         }
-        .plan-section {
-          animation: fade-in 300ms ease forwards;
+        @keyframes typing-dot {
+          0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+          30% { opacity: 1; transform: translateY(-3px); }
         }
-        .download-section {
-          animation: fade-in 300ms ease forwards;
+        .progress-section { animation: fade-in 300ms ease forwards; }
+        .plan-section { animation: fade-in 300ms ease forwards; }
+        .download-section { animation: fade-in 300ms ease forwards; }
+        .active-arrow { animation: pulse-arrow 1.5s ease infinite; display: inline-block; }
+        /* Chat */
+        .chat-container {
+          background: #0E1225;
+          border: 1px solid #1A1F35;
+          border-radius: 8px;
+          min-height: 400px;
+          max-height: 500px;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
         }
-        .active-arrow {
-          animation: pulse-arrow 1.5s ease infinite;
+        .chat-messages {
+          flex: 1;
+          overflow-y: auto;
+          padding: 20px 20px 12px;
+          scroll-behavior: smooth;
+        }
+        .chat-messages::-webkit-scrollbar { width: 4px; }
+        .chat-messages::-webkit-scrollbar-track { background: transparent; }
+        .chat-messages::-webkit-scrollbar-thumb { background: #1A1F35; border-radius: 2px; }
+        .msg-agent {
           display: inline-block;
+          max-width: 80%;
+          padding: 12px 16px;
+          background: #121830;
+          border-radius: 12px 12px 12px 4px;
+          margin-bottom: 12px;
+          font-size: 14.5px;
+          font-weight: 400;
+          color: #B0B8D0;
+          line-height: 1.55;
+          animation: msg-fade-in 200ms ease forwards;
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
+        .msg-agent-wrap {
+          display: flex;
+          justify-content: flex-start;
+          margin-bottom: 0;
+        }
+        .msg-user-wrap {
+          display: flex;
+          justify-content: flex-end;
+          margin-bottom: 0;
+        }
+        .msg-user {
+          display: inline-block;
+          max-width: 70%;
+          padding: 12px 16px;
+          background: rgba(200, 16, 46, 0.12);
+          border: 1px solid rgba(200, 16, 46, 0.2);
+          border-radius: 12px 12px 4px 12px;
+          margin-bottom: 12px;
+          font-size: 14.5px;
+          font-weight: 400;
+          color: #E8EAF0;
+          line-height: 1.55;
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
+        .typing-indicator {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          padding: 14px 18px;
+          background: #121830;
+          border-radius: 12px 12px 12px 4px;
+          width: fit-content;
+          margin-bottom: 12px;
+          animation: msg-fade-in 200ms ease forwards;
+        }
+        .typing-dot {
+          width: 6px;
+          height: 6px;
+          background: #4A5170;
+          border-radius: 50%;
+          display: inline-block;
+        }
+        .typing-dot:nth-child(1) { animation: typing-dot 1.4s ease infinite; }
+        .typing-dot:nth-child(2) { animation: typing-dot 1.4s ease 0.2s infinite; }
+        .typing-dot:nth-child(3) { animation: typing-dot 1.4s ease 0.4s infinite; }
+        .chat-input-area {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 12px 16px;
+          background: #0A0E1A;
+          border-top: 1px solid #1A1F35;
+          flex-shrink: 0;
+        }
+        .chat-input {
+          flex: 1;
+          background: transparent;
+          border: none;
+          color: #E8EAF0;
+          font-family: 'Montserrat', sans-serif;
+          font-size: 14.5px;
+          outline: none;
+          caret-color: #C8102E;
+        }
+        .chat-input::placeholder { color: #2A3050; }
+        .chat-input:disabled { opacity: 0.5; }
+        .send-btn {
+          width: 40px;
+          height: 40px;
+          flex-shrink: 0;
+          border: none;
+          border-radius: 6px;
+          font-size: 16px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: background 180ms ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+        }
+        .send-btn:not(:disabled) { background: #C8102E; }
+        .send-btn:not(:disabled):hover { background: #D91636; }
+        .send-btn:disabled { background: #121630; color: #3A4060; cursor: not-allowed; }
+        /* Intake initial state */
+        .intake-initial {
+          background: #0E1225;
+          border: 1px solid #1A1F35;
+          border-radius: 8px;
+          min-height: 200px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 20px;
+          padding: 40px 32px;
+          text-align: center;
+        }
+        .intake-start-btn {
+          border: 1px solid #C8102E;
+          color: #C8102E;
+          background: transparent;
+          padding: 12px 32px;
+          font-family: 'Montserrat', sans-serif;
+          font-size: 12px;
+          font-weight: 600;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          border-radius: 4px;
+          cursor: pointer;
+          transition: background 180ms ease;
+        }
+        .intake-start-btn:hover:not(:disabled) { background: rgba(200, 16, 46, 0.08); }
+        .intake-start-btn:disabled {
+          border-color: #2A3050;
+          color: #2A3050;
+          cursor: not-allowed;
+        }
+        .textarea-link {
+          background: none;
+          border: none;
+          color: #3A4060;
+          font-family: 'Montserrat', sans-serif;
+          font-size: 12px;
+          cursor: pointer;
+          padding: 0;
+          transition: color 180ms ease;
+        }
+        .textarea-link:hover { color: #6B7394; }
+        .back-link {
+          background: none;
+          border: none;
+          color: #3A4060;
+          font-family: 'Montserrat', sans-serif;
+          font-size: 12px;
+          cursor: pointer;
+          padding: 0;
+          margin-bottom: 10px;
+          display: block;
+          text-align: left;
+          transition: color 180ms ease;
+        }
+        .back-link:hover { color: #6B7394; }
+        /* Summary card */
+        .summary-card {
+          background: #0E1225;
+          border: 1px solid #1A1F35;
+          border-radius: 8px;
+          padding: 28px;
+          animation: fade-in 300ms ease forwards;
+        }
+        .summary-header {
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: #C8102E;
+          margin-bottom: 20px;
+        }
+        .summary-row {
+          display: flex;
+          gap: 12px;
+          margin-bottom: 10px;
+          align-items: baseline;
+        }
+        .summary-label {
+          font-size: 11px;
+          font-weight: 500;
+          color: #4A5170;
+          min-width: 72px;
+          flex-shrink: 0;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+        }
+        .summary-value {
+          font-size: 14px;
+          font-weight: 400;
+          color: #E8EAF0;
+          line-height: 1.45;
+        }
+        .summary-actions {
+          display: flex;
+          gap: 12px;
+          margin-top: 24px;
         }
       `}</style>
 
@@ -289,6 +656,7 @@ export default function HomePage() {
               fontSize: 14,
               color: '#6B7394',
               display: 'block',
+              boxSizing: 'border-box',
             }}
           />
           <p style={{
@@ -305,7 +673,7 @@ export default function HomePage() {
           </p>
         </div>
 
-        {/* ── Prompt ── */}
+        {/* ── Describe Your Presentation ── */}
         <div style={{ marginBottom: 20 }}>
           <label style={{
             display: 'block',
@@ -318,29 +686,176 @@ export default function HomePage() {
           }}>
             Describe Your Presentation
           </label>
-          <textarea
-            ref={textareaRef}
-            className="input-field"
-            value={prompt}
-            onChange={e => setPrompt(e.target.value)}
-            placeholder="What presentation do you need?"
-            disabled={isWorking}
-            rows={5}
-            style={{
-              width: '100%',
-              minHeight: 160,
-              background: '#0E1225',
-              border: '1px solid #1A1F35',
-              borderRadius: 6,
-              padding: '16px 20px',
-              fontFamily: "'Montserrat', sans-serif",
-              fontSize: 15,
-              color: '#E8EAF0',
-              lineHeight: 1.6,
-              resize: 'vertical',
-              display: 'block',
-            }}
-          />
+
+          {/* ── State 1: Initial ── */}
+          {intakeMode === 'initial' && (
+            <div className="intake-initial">
+              <p style={{ fontSize: 14, color: '#6B7394', fontWeight: 400, margin: 0 }}>
+                Ready to build your deck?
+              </p>
+              <button
+                className="intake-start-btn"
+                onClick={() => startConversation()}
+                disabled={!hasApiKey || isWorking}
+                title={!hasApiKey ? 'Enter your API key above to begin' : undefined}
+              >
+                Start Conversation
+              </button>
+              <button
+                className="textarea-link"
+                onClick={() => setIntakeMode('textarea')}
+              >
+                or paste a detailed brief below
+              </button>
+            </div>
+          )}
+
+          {/* ── State 2: Chat active ── */}
+          {intakeMode === 'chat' && (
+            <div className="chat-container">
+              <div className="chat-messages">
+                {chatMessages.filter(m => !m.hidden).map((msg, i) => (
+                  <div key={i} className={msg.role === 'assistant' ? 'msg-agent-wrap' : 'msg-user-wrap'}>
+                    <div className={msg.role === 'assistant' ? 'msg-agent' : 'msg-user'}>
+                      {msg.displayContent ?? msg.content}
+                    </div>
+                  </div>
+                ))}
+                {isTyping && (
+                  <div className="msg-agent-wrap">
+                    <div className="typing-indicator">
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+              <div className="chat-input-area">
+                <input
+                  ref={chatInputRef}
+                  className="chat-input"
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={handleChatKeyDown}
+                  placeholder="Type your answer..."
+                  disabled={isTyping || isWorking}
+                  autoComplete="off"
+                />
+                <button
+                  className="send-btn"
+                  onClick={sendChatMessage}
+                  disabled={!chatInput.trim() || isTyping || isWorking}
+                  aria-label="Send"
+                >
+                  ↑
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── State 3: Intake complete — summary card ── */}
+          {intakeMode === 'complete' && intakeData && (
+            <div className="summary-card">
+              <div className="summary-header">Presentation Brief</div>
+              {[
+                ['Topic', intakeData.topic],
+                ['Audience', intakeData.audience],
+                ['Language', intakeData.language],
+                ['Slides', intakeData.slide_count],
+                ['Sections', Array.isArray(intakeData.sections)
+                  ? intakeData.sections.join(', ')
+                  : intakeData.sections],
+                ['Tone', intakeData.tone],
+                ...(intakeData.special_requests
+                  ? [['Special', intakeData.special_requests] as [string, string]]
+                  : []),
+              ].map(([label, value]) => value ? (
+                <div key={label} className="summary-row">
+                  <span className="summary-label">{label}</span>
+                  <span className="summary-value">{String(value)}</span>
+                </div>
+              ) : null)}
+              <div className="summary-actions">
+                <button
+                  className="btn-primary"
+                  onClick={handleGenerateFromIntake}
+                  disabled={!canGenerateFromIntake}
+                  style={{
+                    flex: 1,
+                    padding: '18px 0',
+                    background: canGenerateFromIntake ? '#C8102E' : '#121630',
+                    border: 'none',
+                    borderRadius: 4,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: canGenerateFromIntake ? '#FFFFFF' : '#3A4060',
+                    cursor: canGenerateFromIntake ? 'pointer' : 'not-allowed',
+                    fontFamily: "'Montserrat', sans-serif",
+                  }}
+                >
+                  {isWorking ? 'Generating...' : 'Generate Presentation'}
+                </button>
+                <button
+                  className="btn-ghost"
+                  onClick={handleStartOver}
+                  disabled={isWorking}
+                  style={{
+                    flex: 1,
+                    padding: '18px 0',
+                    background: 'transparent',
+                    border: '1px solid #1A1F35',
+                    borderRadius: 4,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: '#6B7394',
+                    cursor: isWorking ? 'not-allowed' : 'pointer',
+                    fontFamily: "'Montserrat', sans-serif",
+                  }}
+                >
+                  Start Over
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── State 4: Textarea (power user mode) ── */}
+          {intakeMode === 'textarea' && (
+            <>
+              <button className="back-link" onClick={() => setIntakeMode('initial')}>
+                ← Back to guided mode
+              </button>
+              <textarea
+                ref={textareaRef}
+                className="input-field"
+                value={prompt}
+                onChange={e => setPrompt(e.target.value)}
+                placeholder="What presentation do you need?"
+                disabled={isWorking}
+                rows={5}
+                style={{
+                  width: '100%',
+                  minHeight: 160,
+                  background: '#0E1225',
+                  border: '1px solid #1A1F35',
+                  borderRadius: 6,
+                  padding: '16px 20px',
+                  fontFamily: "'Montserrat', sans-serif",
+                  fontSize: 15,
+                  color: '#E8EAF0',
+                  lineHeight: 1.6,
+                  resize: 'vertical',
+                  display: 'block',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </>
+          )}
         </div>
 
         {/* ── Example prompts ── */}
@@ -372,32 +887,34 @@ export default function HomePage() {
           ))}
         </div>
 
-        {/* ── Separator line before button ── */}
-        <div style={{ borderTop: '1px solid #121630', marginBottom: 40 }} />
-
-        {/* ── Generate / Reset button ── */}
-        {(step === 'idle' || step === 'error') && (
-          <button
-            className="btn-primary"
-            onClick={handleGenerate}
-            disabled={!canGenerate}
-            style={{
-              width: '100%',
-              padding: '18px 0',
-              background: canGenerate ? '#C8102E' : '#121630',
-              border: 'none',
-              borderRadius: 4,
-              fontSize: 13,
-              fontWeight: 600,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              color: canGenerate ? '#FFFFFF' : '#3A4060',
-              cursor: canGenerate ? 'pointer' : 'not-allowed',
-              fontFamily: "'Montserrat', sans-serif",
-            }}
-          >
-            Generate Presentation
-          </button>
+        {/* ── Separator + Generate button — textarea mode only ── */}
+        {intakeMode === 'textarea' && (
+          <>
+            <div style={{ borderTop: '1px solid #121630', marginBottom: 40 }} />
+            {(step === 'idle' || step === 'error') && (
+              <button
+                className="btn-primary"
+                onClick={() => handleGenerate()}
+                disabled={!canGenerateFromTextarea}
+                style={{
+                  width: '100%',
+                  padding: '18px 0',
+                  background: canGenerateFromTextarea ? '#C8102E' : '#121630',
+                  border: 'none',
+                  borderRadius: 4,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: canGenerateFromTextarea ? '#FFFFFF' : '#3A4060',
+                  cursor: canGenerateFromTextarea ? 'pointer' : 'not-allowed',
+                  fontFamily: "'Montserrat', sans-serif",
+                }}
+              >
+                Generate Presentation
+              </button>
+            )}
+          </>
         )}
 
         {/* ── Error ── */}
@@ -461,7 +978,6 @@ export default function HomePage() {
               padding: 32,
             }}>
               {(() => {
-                // Group slides by section (section_divider marks new sections)
                 type Group = { sectionName: string; slides: { template: string; label: string }[] };
                 const groups: Group[] = [];
                 let currentGroup: Group = { sectionName: 'Presentation', slides: [] };

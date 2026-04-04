@@ -27,3 +27,24 @@ export type Step =
   | 'building'
   | 'done'
   | 'error';
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  displayContent?: string; // cleaned display text (strips ---INTAKE COMPLETE--- block)
+  hidden?: boolean;        // not rendered in UI (e.g. 'START' trigger)
+}
+
+export interface IntakeData {
+  topic: string;
+  audience: string;
+  language: string;
+  slide_count: string;
+  sections: string[] | string;
+  key_data: string[] | string;
+  tone: string;
+  special_requests: string;
+  full_brief: string;
+}
+
+export type IntakeMode = 'initial' | 'chat' | 'complete' | 'textarea';
