@@ -311,6 +311,17 @@ export default function HomePage() {
   return (
     <div style={{ display: 'flex', minHeight: '100vh', fontFamily: "'Montserrat', sans-serif" }}>
       <style>{`
+        /* ── Global cursor ── */
+        *, *::before, *::after { cursor: default; }
+        button, a, [role="button"],
+        .example-item, .intake-start-btn, .textarea-link,
+        .back-link, .send-btn, .btn-primary, .btn-ghost, .btn-download {
+          cursor: pointer;
+          transition-property: color, background, border-color, box-shadow, opacity, padding-left;
+          transition-duration: 150ms;
+          transition-timing-function: ease;
+        }
+
         /* ── Two-panel layout ── */
         .left-panel {
           width: 45%;
@@ -330,33 +341,100 @@ export default function HomePage() {
           background: #FFFFFF;
           border-left: 1px solid #EBEBEB;
           min-height: 100vh;
+          overflow-y: auto;
+          scroll-behavior: smooth;
         }
         .right-inner {
           max-width: 600px;
           padding: 64px 48px 80px;
           margin: 0 auto;
         }
+
+        /* ── Right panel scrollbar: hidden by default, 2px on hover ── */
+        .right-panel::-webkit-scrollbar { width: 0px; }
+        .right-panel:hover::-webkit-scrollbar { width: 2px; }
+        .right-panel::-webkit-scrollbar-track { background: transparent; }
+        .right-panel::-webkit-scrollbar-thumb { background: #E0E0E0; }
+        .right-panel { scrollbar-width: none; }
+        .right-panel:hover { scrollbar-width: thin; scrollbar-color: #E0E0E0 transparent; }
+
+        /* ── Ken Burns animation for left panel background ── */
+        @keyframes slowZoom {
+          from { transform: scale(1.0); }
+          to   { transform: scale(1.05); }
+        }
+        .city-bg {
+          animation: slowZoom 30s ease-in-out infinite alternate;
+        }
+
         /* ── Input focus ── */
         .input-field:focus {
           border-color: #1A1A1A !important;
           box-shadow: none !important;
           outline: none;
         }
+        /* ── API key valid checkmark ── */
+        .api-key-wrap { position: relative; }
+        .api-key-check {
+          position: absolute;
+          right: 14px;
+          top: 50%;
+          transform: translateY(-50%);
+          font-size: 14px;
+          color: #22C55E;
+          opacity: 0;
+          transition: opacity 250ms ease;
+          pointer-events: none;
+        }
+        .api-key-check.visible { opacity: 1; }
+
         /* ── Buttons ── */
-        .btn-primary { transition: background 200ms ease; }
-        .btn-primary:not(:disabled):hover { background: #B00D27 !important; }
+        .btn-primary { transition: background 200ms ease, box-shadow 200ms ease; }
+        .btn-primary:not(:disabled):hover {
+          background: #B00D27 !important;
+          box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
         .btn-ghost { transition: color 150ms ease; }
         .btn-ghost:hover { color: #1A1A1A !important; }
         .btn-download { transition: background 200ms ease, color 200ms ease; }
         .btn-download:hover { background: #1A1A1A !important; color: #FFFFFF !important; }
+
         /* ── Example prompts ── */
-        .example-item { transition: color 150ms ease; }
-        .example-item:hover { color: #1A1A1A !important; }
+        .example-item {
+          transition: color 150ms ease, border-left-color 150ms ease, padding-left 150ms ease;
+          border-left: 2px solid transparent;
+          padding-left: 0;
+        }
+        .example-item:hover {
+          color: #1A1A1A !important;
+          border-left-color: #C8102E !important;
+          padding-left: 12px !important;
+        }
+
         /* ── Fade-in ── */
         @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes enter-up {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
         .progress-section { animation: fade-in 200ms ease forwards; }
         .plan-section { animation: fade-in 200ms ease forwards; }
         .download-section { animation: fade-in 200ms ease forwards; }
+
+        /* ── Intake initial entrance animations ── */
+        .intake-tagline {
+          opacity: 0;
+          animation: enter-up 600ms ease 300ms forwards;
+        }
+        .intake-begin-btn {
+          opacity: 0;
+          animation: enter-up 600ms ease 400ms forwards;
+        }
+        .intake-brief-link {
+          opacity: 0;
+          animation: enter-up 600ms ease 500ms forwards;
+        }
+
         /* ── Chat container ── */
         .chat-container {
           background: #FFFFFF;
@@ -447,6 +525,7 @@ export default function HomePage() {
           border-color: #1A1A1A;
         }
         .send-btn:disabled { color: #CCCCCC; border-color: #EBEBEB; cursor: not-allowed; }
+
         /* ── Intake initial ── */
         .intake-initial {
           background: #FFFFFF;
@@ -470,9 +549,13 @@ export default function HomePage() {
           letter-spacing: 0.12em;
           text-transform: uppercase;
           cursor: pointer;
-          transition: background 200ms ease, color 200ms ease;
+          transition: background 200ms ease, color 200ms ease, box-shadow 200ms ease;
         }
-        .intake-start-btn:hover:not(:disabled) { background: #1A1A1A; color: #FFFFFF; }
+        .intake-start-btn:hover:not(:disabled) {
+          background: #1A1A1A;
+          color: #FFFFFF;
+          box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
         .intake-start-btn:disabled {
           border-color: #CCCCCC;
           color: #CCCCCC;
@@ -505,6 +588,7 @@ export default function HomePage() {
           transition: color 150ms ease;
         }
         .back-link:hover { color: #1A1A1A; }
+
         /* ── Summary card ── */
         .summary-card {
           background: #FFFFFF;
@@ -546,6 +630,7 @@ export default function HomePage() {
           align-items: center;
           margin-top: 24px;
         }
+
         /* ── Tablet (1024–1279px) ── */
         @media (min-width: 1024px) and (max-width: 1279px) {
           .left-panel { width: 40%; }
@@ -570,14 +655,25 @@ export default function HomePage() {
           ══════════════════════════════════════════════ */}
       <div className="left-panel">
 
-        {/* City background at 4% opacity */}
+        {/* City background at 4% opacity + Ken Burns */}
+        <div
+          className="city-bg"
+          style={{
+            position: 'absolute', inset: 0,
+            backgroundImage: "url('/invescore/city-bg.jpg')",
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            opacity: 0.04,
+            pointerEvents: 'none',
+          }}
+        />
+
+        {/* Vignette overlay */}
         <div style={{
           position: 'absolute', inset: 0,
-          backgroundImage: "url('/invescore/city-bg.jpg')",
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          opacity: 0.04,
+          background: 'linear-gradient(to bottom, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0) 30%, rgba(0,0,0,0) 70%, rgba(0,0,0,0.4) 100%)',
           pointerEvents: 'none',
+          zIndex: 0,
         }} />
 
         {/* Centered brand block */}
@@ -620,6 +716,18 @@ export default function HomePage() {
           }}>
             Presentation Generator
           </p>
+          {/* Dot ornament */}
+          <div style={{
+            marginTop: 20,
+            display: 'flex',
+            gap: 12,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            {['·', '·', '·'].map((dot, i) => (
+              <span key={i} style={{ fontSize: 18, color: 'rgba(255,255,255,0.2)', lineHeight: 1 }}>{dot}</span>
+            ))}
+          </div>
         </div>
 
         {/* Footer pinned to bottom */}
@@ -657,28 +765,32 @@ export default function HomePage() {
           }}>
             API Key
           </label>
-          <input
-            type="password"
-            className="input-field"
-            value={apiKey}
-            onChange={e => setApiKey(e.target.value)}
-            placeholder="sk-ant-..."
-            disabled={isWorking}
-            autoComplete="off"
-            spellCheck={false}
-            style={{
-              width: '100%',
-              background: '#FFFFFF',
-              border: '1px solid #E0E0E0',
-              borderRadius: 0,
-              padding: '14px 18px',
-              fontFamily: "'SF Mono', 'JetBrains Mono', monospace",
-              fontSize: 13,
-              color: '#1A1A1A',
-              display: 'block',
-              boxSizing: 'border-box',
-            }}
-          />
+          <div className="api-key-wrap">
+            <input
+              type="password"
+              className="input-field"
+              value={apiKey}
+              onChange={e => setApiKey(e.target.value)}
+              placeholder="sk-ant-..."
+              disabled={isWorking}
+              autoComplete="off"
+              spellCheck={false}
+              style={{
+                width: '100%',
+                background: '#FFFFFF',
+                border: '1px solid #E0E0E0',
+                borderRadius: 0,
+                padding: apiKey.trim().length > 20 ? '14px 40px 14px 18px' : '14px 18px',
+                fontFamily: "'SF Mono', 'JetBrains Mono', monospace",
+                fontSize: 13,
+                color: '#1A1A1A',
+                display: 'block',
+                boxSizing: 'border-box',
+                transition: 'padding 150ms ease',
+              }}
+            />
+            <span className={`api-key-check${apiKey.trim().length > 20 ? ' visible' : ''}`}>✓</span>
+          </div>
           <p style={{
             marginTop: 8,
             fontSize: 11,
@@ -706,7 +818,7 @@ export default function HomePage() {
           {/* ── State 1: Initial ── */}
           {intakeMode === 'initial' && (
             <div className="intake-initial">
-              <p style={{
+              <p className="intake-tagline" style={{
                 fontSize: 24,
                 fontWeight: 300,
                 color: '#1A1A1A',
@@ -716,7 +828,7 @@ export default function HomePage() {
                 What would you like to create?
               </p>
               <button
-                className="intake-start-btn"
+                className="intake-start-btn intake-begin-btn"
                 onClick={() => startConversation()}
                 disabled={!hasApiKey || isWorking}
                 title={!hasApiKey ? 'Enter your API key above to begin' : undefined}
@@ -724,7 +836,7 @@ export default function HomePage() {
                 Begin
               </button>
               <button
-                className="textarea-link"
+                className="textarea-link intake-brief-link"
                 onClick={() => setIntakeMode('textarea')}
               >
                 or write a detailed brief
@@ -871,6 +983,11 @@ export default function HomePage() {
               />
             </>
           )}
+        </div>
+
+        {/* ── Decorative separator ── */}
+        <div style={{ display: 'flex', justifyContent: 'center', margin: '24px 0' }}>
+          <div style={{ width: 40, height: 1, background: '#EBEBEB' }} />
         </div>
 
         {/* ── Example prompts ── */}
