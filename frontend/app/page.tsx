@@ -655,7 +655,7 @@ export default function HomePage() {
           ══════════════════════════════════════════════ */}
       <div className="left-panel">
 
-        {/* City background at 4% opacity + Ken Burns */}
+        {/* City background — full opacity + Ken Burns */}
         <div
           className="city-bg"
           style={{
@@ -663,15 +663,15 @@ export default function HomePage() {
             backgroundImage: "url('/invescore/city-bg.jpg')",
             backgroundSize: 'cover',
             backgroundPosition: 'center',
-            opacity: 0.04,
+            opacity: 1,
             pointerEvents: 'none',
           }}
         />
 
-        {/* Vignette overlay */}
+        {/* Dark navy overlay — lets photo show through while keeping text readable */}
         <div style={{
           position: 'absolute', inset: 0,
-          background: 'linear-gradient(to bottom, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0) 30%, rgba(0,0,0,0) 70%, rgba(0,0,0,0.4) 100%)',
+          background: 'linear-gradient(to bottom, rgba(12,41,59,0.55) 0%, rgba(12,41,59,0.45) 50%, rgba(12,41,59,0.6) 100%)',
           pointerEvents: 'none',
           zIndex: 0,
         }} />
@@ -690,14 +690,14 @@ export default function HomePage() {
             alt="InvesCore Property"
             width={160}
             height={64}
-            style={{ objectFit: 'contain', maxWidth: 160, filter: 'brightness(0)', marginBottom: 28 }}
+            style={{ objectFit: 'contain', maxWidth: 160, filter: 'brightness(0) invert(1)', marginBottom: 28 }}
             priority
           />
           <h1 style={{
             fontSize: 42,
             fontWeight: 300,
             letterSpacing: '0.22em',
-            color: '#1A1A1A',
+            color: '#FFFFFF',
             textTransform: 'uppercase',
             lineHeight: 1,
             margin: 0,
@@ -710,7 +710,7 @@ export default function HomePage() {
             fontSize: 13,
             fontWeight: 400,
             letterSpacing: '0.06em',
-            color: '#B5B5B5',
+            color: 'rgba(255,255,255,0.65)',
             margin: 0,
             textAlign: 'center',
           }}>
@@ -738,7 +738,7 @@ export default function HomePage() {
           fontWeight: 500,
           letterSpacing: '0.16em',
           textTransform: 'uppercase',
-          color: '#CCCCCC',
+          color: 'rgba(255,255,255,0.35)',
           textAlign: 'center',
           zIndex: 1,
         }}>
