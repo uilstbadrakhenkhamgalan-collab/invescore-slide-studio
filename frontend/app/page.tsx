@@ -309,39 +309,60 @@ export default function HomePage() {
   const showProgress = step !== 'idle' && step !== 'error';
 
   return (
-    <div style={{
-      background: '#FAFAFA',
-      minHeight: '100vh',
-      fontFamily: "'Montserrat', sans-serif",
-      padding: '60px 24px 0',
-    }}>
+    <div style={{ display: 'flex', minHeight: '100vh', fontFamily: "'Montserrat', sans-serif" }}>
       <style>{`
-        /* Input focus */
+        /* ── Two-panel layout ── */
+        .left-panel {
+          width: 45%;
+          flex-shrink: 0;
+          position: sticky;
+          top: 0;
+          height: 100vh;
+          background: #F5F5F5;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+        }
+        .right-panel {
+          flex: 1;
+          background: #FFFFFF;
+          border-left: 1px solid #EBEBEB;
+          min-height: 100vh;
+        }
+        .right-inner {
+          max-width: 600px;
+          padding: 64px 48px 80px;
+          margin: 0 auto;
+        }
+        /* ── Input focus ── */
         .input-field:focus {
           border-color: #1A1A1A !important;
           box-shadow: none !important;
           outline: none;
         }
-        /* Buttons */
+        /* ── Buttons ── */
         .btn-primary { transition: background 200ms ease; }
         .btn-primary:not(:disabled):hover { background: #B00D27 !important; }
         .btn-ghost { transition: color 150ms ease; }
         .btn-ghost:hover { color: #1A1A1A !important; }
         .btn-download { transition: background 200ms ease, color 200ms ease; }
         .btn-download:hover { background: #1A1A1A !important; color: #FFFFFF !important; }
-        /* Example prompts */
+        /* ── Example prompts ── */
         .example-item { transition: color 150ms ease; }
         .example-item:hover { color: #1A1A1A !important; }
-        /* Fade-in */
+        /* ── Fade-in ── */
         @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
         .progress-section { animation: fade-in 200ms ease forwards; }
         .plan-section { animation: fade-in 200ms ease forwards; }
         .download-section { animation: fade-in 200ms ease forwards; }
-        /* Chat container */
+        /* ── Chat container ── */
         .chat-container {
           background: #FFFFFF;
           border: 1px solid #EBEBEB;
-          max-height: 480px;
+          min-height: 420px;
+          max-height: 520px;
           display: flex;
           flex-direction: column;
           overflow: hidden;
@@ -426,7 +447,7 @@ export default function HomePage() {
           border-color: #1A1A1A;
         }
         .send-btn:disabled { color: #CCCCCC; border-color: #EBEBEB; cursor: not-allowed; }
-        /* Intake initial */
+        /* ── Intake initial ── */
         .intake-initial {
           background: #FFFFFF;
           border: 1px solid #EBEBEB;
@@ -436,6 +457,7 @@ export default function HomePage() {
           align-items: center;
           justify-content: center;
           gap: 24px;
+          padding: 80px 32px;
         }
         .intake-start-btn {
           border: 1px solid #1A1A1A;
@@ -483,7 +505,7 @@ export default function HomePage() {
           transition: color 150ms ease;
         }
         .back-link:hover { color: #1A1A1A; }
-        /* Summary card */
+        /* ── Summary card ── */
         .summary-card {
           background: #FFFFFF;
           border: 1px solid #EBEBEB;
@@ -524,80 +546,106 @@ export default function HomePage() {
           align-items: center;
           margin-top: 24px;
         }
-        /* Mobile */
-        @media (max-width: 768px) {
-          .page-card {
-            margin: 0 !important;
-            padding: 48px 28px !important;
-            box-shadow: none !important;
-            min-height: 100vh;
+        /* ── Tablet (1024–1279px) ── */
+        @media (min-width: 1024px) and (max-width: 1279px) {
+          .left-panel { width: 40%; }
+        }
+        /* ── Mobile (< 1024px) ── */
+        @media (max-width: 1023px) {
+          .left-panel {
+            width: 100%;
+            height: 200px;
+            position: relative;
+            flex-shrink: 0;
           }
-          .logo-img { max-width: 120px !important; }
-          .page-title { font-size: 28px !important; }
-          .chat-container { min-height: 320px !important; max-height: 420px !important; }
+          .right-panel { border-left: none; border-top: 1px solid #EBEBEB; }
+          .right-inner { padding: 40px 24px 64px; }
+          .chat-container { min-height: 340px !important; max-height: 420px !important; }
+          .left-panel-footer { display: none !important; }
         }
       `}</style>
 
-      {/* ── Content card ── */}
-      <div
-        className="page-card"
-        style={{
-          maxWidth: 560,
-          margin: '0 auto',
-          background: '#FFFFFF',
-          padding: '72px 56px',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-        }}
-      >
+      {/* ══════════════════════════════════════════════
+          LEFT PANEL — brand / decorative, non-interactive
+          ══════════════════════════════════════════════ */}
+      <div className="left-panel">
 
-        {/* ── Logo ── */}
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 40 }}>
+        {/* City background at 4% opacity */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          backgroundImage: "url('/invescore/city-bg.jpg')",
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          opacity: 0.04,
+          pointerEvents: 'none',
+        }} />
+
+        {/* Centered brand block */}
+        <div style={{
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 0,
+          zIndex: 1,
+        }}>
           <Image
             src="/invescore/logo-new.png"
             alt="InvesCore Property"
             width={160}
             height={64}
-            className="logo-img"
-            style={{ objectFit: 'contain', maxWidth: 160, filter: 'brightness(0)' }}
+            style={{ objectFit: 'contain', maxWidth: 160, filter: 'brightness(0)', marginBottom: 28 }}
             priority
           />
-        </div>
-
-        {/* ── Title ── */}
-        <h1
-          className="page-title"
-          style={{
-            textAlign: 'center',
-            fontSize: 36,
+          <h1 style={{
+            fontSize: 42,
             fontWeight: 300,
-            letterSpacing: '0.20em',
+            letterSpacing: '0.22em',
             color: '#1A1A1A',
             textTransform: 'uppercase',
             lineHeight: 1,
-          }}
-        >
-          Slide Studio
-        </h1>
-
-        {/* ── Red accent line ── */}
-        <div style={{ display: 'flex', justifyContent: 'center', margin: '12px 0' }}>
-          <div style={{ width: 40, height: 1.5, background: '#C8102E' }} />
+            margin: 0,
+            textAlign: 'center',
+          }}>
+            Slide Studio
+          </h1>
+          <div style={{ width: 40, height: 1.5, background: '#C8102E', margin: '14px 0' }} />
+          <p style={{
+            fontSize: 13,
+            fontWeight: 400,
+            letterSpacing: '0.06em',
+            color: '#B5B5B5',
+            margin: 0,
+            textAlign: 'center',
+          }}>
+            Presentation Generator
+          </p>
         </div>
 
-        {/* ── Subtitle ── */}
-        <p style={{
+        {/* Footer pinned to bottom */}
+        <p className="left-panel-footer" style={{
+          position: 'absolute',
+          bottom: 32,
+          fontSize: 9,
+          fontWeight: 500,
+          letterSpacing: '0.16em',
+          textTransform: 'uppercase',
+          color: '#CCCCCC',
           textAlign: 'center',
-          fontSize: 12,
-          fontWeight: 400,
-          letterSpacing: '0.06em',
-          color: '#B5B5B5',
-          marginBottom: 56,
+          zIndex: 1,
         }}>
-          Presentation Generator
+          InvesCore Property
         </p>
+      </div>
+
+      {/* ══════════════════════════════════════════════
+          RIGHT PANEL — all interactive content
+          ══════════════════════════════════════════════ */}
+      <div className="right-panel">
+        <div className="right-inner">
 
         {/* ── API Key ── */}
-        <div style={{ marginBottom: 48 }}>
+        <div style={{ marginBottom: 48, marginTop: 0 }}>
           <label style={{
             display: 'block',
             fontSize: 10,
@@ -659,7 +707,7 @@ export default function HomePage() {
           {intakeMode === 'initial' && (
             <div className="intake-initial">
               <p style={{
-                fontSize: 20,
+                fontSize: 24,
                 fontWeight: 300,
                 color: '#1A1A1A',
                 textAlign: 'center',
@@ -1064,6 +1112,27 @@ export default function HomePage() {
                 ~${tokenUsage.estimated_cost_usd.toFixed(4)} &nbsp;·&nbsp; {(tokenUsage.input_tokens + tokenUsage.output_tokens).toLocaleString()} tokens
               </p>
             )}
+            {/* Building accent strip */}
+            <div style={{
+              marginTop: 20,
+              width: '100%',
+              height: 120,
+              overflow: 'hidden',
+              flexShrink: 0,
+            }}>
+              <img
+                src="/invescore/building-accent.jpg"
+                alt=""
+                aria-hidden="true"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  opacity: 0.06,
+                  display: 'block',
+                }}
+              />
+            </div>
             <button
               className="btn-ghost"
               onClick={handleReset}
@@ -1088,22 +1157,8 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* ── Footer ── */}
-        <div style={{ marginTop: 64, paddingBottom: 32 }}>
-          <div style={{ borderTop: '1px solid #EBEBEB', marginBottom: 20 }} />
-          <p style={{
-            textAlign: 'center',
-            fontSize: 9,
-            fontWeight: 500,
-            letterSpacing: '0.16em',
-            textTransform: 'uppercase',
-            color: '#CCCCCC',
-          }}>
-            InvesCore Property
-          </p>
-        </div>
-
-      </div>
+        </div>{/* end right-inner */}
+      </div>{/* end right-panel */}
     </div>
   );
 }
