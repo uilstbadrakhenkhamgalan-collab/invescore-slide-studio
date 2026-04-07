@@ -1,57 +1,65 @@
 """
-InvesCore Slide Studio — FastAPI Backend
+InvesCore Slide Studio — FastAPI Backend v2
 """
-import os
+import io
 import json
+import re
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncGenerator
 
 import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from template_engine import InvescoreTemplateEngine
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR = Path(__file__).parent
-TEMPLATE_PATH = BASE_DIR / "templates" / "InvesCore_Master_Template.pptx"
+BASE_DIR        = Path(__file__).parent
+TEMPLATE_PATH   = BASE_DIR / "templates" / "InvesCore_Master_Template.pptx"
 BRAND_GUIDE_PATH = BASE_DIR / "brand_guide.json"
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(title="InvesCore Slide Studio API", version="1.0.0")
+app = FastAPI(title="InvesCore Slide Studio API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # In production, restrict to your frontend domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Models ────────────────────────────────────────────────────────────────────
+# ── Pydantic models ───────────────────────────────────────────────────────────
 class InterpretRequest(BaseModel):
     api_key: str
     prompt: str
 
 class GenerateRequest(BaseModel):
     api_key: str
-    slide_plan: list[dict]
+    slide_plan: list[dict]   # V1: flat list of {template, content}
 
-class InterpretResponse(BaseModel):
-    presentation_title: str
-    slides: list[dict]
-    token_usage: dict
+class GenerateV2Request(BaseModel):
+    api_key: str
+    slide_plan: dict         # V2: {presentation_title, sections:[...]}
 
 class IntakeRequest(BaseModel):
     api_key: str
-    messages: list[dict]  # [{"role": "user"|"assistant", "content": "..."}]
+    messages: list[dict]     # [{role, content}, ...]
 
-# ── System prompt for Interpreter Agent ──────────────────────────────────────
+# ── Load brand guide ──────────────────────────────────────────────────────────
 with open(BRAND_GUIDE_PATH, encoding="utf-8") as f:
     _brand = json.load(f)
+
+# ── Content-area bounds (passed to Builder Agent) ─────────────────────────────
+_engine_tmp = InvescoreTemplateEngine(str(TEMPLATE_PATH), str(BRAND_GUIDE_PATH))
+_CONTENT_BOUNDS = _engine_tmp.get_content_area_bounds()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SYSTEM PROMPTS
+# ═════════════════════════════════════════════════════════════════════════════
 
 INTAKE_SYSTEM_PROMPT = """You are the InvesCore Slide Studio intake assistant. Your job is to interview the user to gather everything needed to create a perfect branded presentation.
 
@@ -113,89 +121,274 @@ WHEN YOU HAVE ENOUGH INFORMATION, end your response with exactly this format (af
 
 The full_brief field is the most important — it should read like a detailed, specific presentation request that incorporates every piece of information the user provided."""
 
-INTERPRETER_SYSTEM_PROMPT = """You are the InvesCore Slide Studio Interpreter. Convert the user's presentation request into a structured JSON slide plan.
 
-InvesCore Property is a Mongolian real estate and investment management company.
+INTERPRETER_SYSTEM_PROMPT = """You are the InvesCore Slide Studio Interpreter. Convert a presentation brief into a structured slide plan for a professional Mongolian real estate and investment company.
 
-Available slide templates (actual branded slides that will be cloned):
-- "opening"           — Cover slide. Dynamic: presentation_title
-- "ending"            — Closing slide. Dynamic: closing_message, contact_info
-- "agenda"            — Contents/agenda. Dynamic: section_1_title, section_2_title, section_3_title, section_1_pages, section_2_pages, section_3_pages
-- "section_divider"   — Section header. Dynamic: section_title, section_description
-- "content_text"      — Text/bullets. Dynamic: subtitle_label, title, body_text (use | to separate bullet lines)
-- "content_table"     — Data table. Dynamic: title (table data must be pre-formatted in body_text as rows)
-- "content_comparison" — Two columns. Dynamic: section_label, left_title, right_title, left_content, right_content (use | for line breaks)
-- "content_timeline"  — Goals/milestones. Dynamic: title, column_1_title, column_2_title, column_3_title, column_1_items, column_2_items, column_3_items (use | for items)
-- "content_chart"     — Data analysis. Dynamic: title, subtitle, body_text
-- "content_quote"     — Key statement. Dynamic: quote_text, attribution
-- "content_team"      — Team/departments. Dynamic: title, unit_1_name, unit_2_name, unit_3_name
+IMPORTANT — OUTPUT FORMAT:
+Return ONLY valid JSON, no markdown fences, no explanation. The schema:
 
-RULES:
-1. ALWAYS start with "opening" and end with "ending"
-2. Include "agenda" as slide 2 if the presentation has 5+ content slides
-3. Use "section_divider" between major topic shifts
-4. Keep body_text concise — use | as line separator for bullets (max 6 items per slide)
-5. Write ALL text that should appear on each slide — do not leave blanks
-6. Match professional financial/investment services tone
-7. For Mongolian-language requests, write all slide content in Mongolian
-8. For English requests, write all content in English
-9. Make intelligent assumptions for vague requests — create a complete, professional presentation
-
-Respond with ONLY valid JSON (no markdown code fences, no explanations):
 {
-  "presentation_title": "...",
-  "slides": [
+  "presentation_title": "TITLE IN CAPS",
+  "sections": [
     {
-      "template": "opening",
-      "content": {
-        "presentation_title": "..."
-      }
-    },
-    {
-      "template": "agenda",
-      "content": {
-        "section_1_title": "...",
-        "section_2_title": "...",
-        "section_3_title": "...",
-        "section_1_pages": "pg. 3-5",
-        "section_2_pages": "pg. 6-8",
-        "section_3_pages": "pg. 9-11"
-      }
-    },
-    ...
-    {
-      "template": "ending",
-      "content": {
-        "closing_message": "THANK YOU",
-        "contact_info": "InvesCore Property Research"
-      }
+      "name": "SECTION NAME IN CAPS",
+      "slides": [
+        {
+          "slide_type": "content",
+          "title": "SLIDE TITLE",
+          "description": "Detailed description of what this slide shows, what layout works best, what visual elements to include. Be specific. This directly guides the Builder Agent that will write python-pptx code.",
+          "content_spec": {
+            "layout": "metric_callout | two_column | table_focus | chart_focus | timeline | comparison | bullets | mixed | freeform",
+            "elements": [
+              { "type": "title", "text": "THE SLIDE TITLE" },
+              { "type": "subtitle", "text": "Optional subtitle or section label" },
+              { "type": "bullets", "items": ["Point 1", "Point 2", "Point 3"] },
+              {
+                "type": "table",
+                "headers": ["Col A", "Col B", "Col C"],
+                "rows": [["R1A","R1B","R1C"], ["R2A","R2B","R2C"]]
+              },
+              {
+                "type": "chart",
+                "chart_type": "bar | column | line | pie | stacked_bar",
+                "title": "Chart Title",
+                "categories": ["Cat1","Cat2","Cat3"],
+                "series": [{"name": "Series1", "values": [10,20,30]}]
+              },
+              { "type": "metric", "value": "₮15.2B", "label": "Revenue", "delta": "+18% YoY" },
+              { "type": "text_block", "heading": "Key Insight", "body": "..." },
+              { "type": "callout", "text": "Important highlighted statement" },
+              {
+                "type": "comparison",
+                "left": {"title": "Option A", "points": ["..."]},
+                "right": {"title": "Option B", "points": ["..."]}
+              },
+              {
+                "type": "timeline",
+                "steps": [{"label": "Q1 2025", "description": "Phase 1 launch"}]
+              },
+              {
+                "type": "diagram_description",
+                "description": "Describe a visual: e.g. '3-step flow: Acquisition → Development → Exit, each in a dark navy box with connecting arrows'"
+              }
+            ]
+          }
+        },
+        {
+          "slide_type": "section_divider",
+          "title": "SECTION TITLE",
+          "description": "One-sentence overview of this section"
+        }
+      ]
     }
   ]
-}"""
+}
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+RULES:
+1. Opening, agenda, and closing slides are automatic — do NOT include them
+2. Define sections (max 8) — the agenda is auto-generated from them
+3. Each section: 1–5 slides
+4. Total: 5–20 content slides
+5. Write ALL actual text, numbers, and data — be specific; use plausible InvesCore data
+6. Choose the right visual for each slide's purpose:
+   - Financial data → table or chart
+   - KPIs / key numbers → metric_callout (big numbers, card layout)
+   - Strategy / narrative → bullets or text_block
+   - Process / phases → timeline or diagram_description
+   - Side-by-side alternatives → comparison
+   - Mixed data + commentary → mixed or two_column
+7. Vary layouts — do not repeat the same layout on consecutive slides
+8. The description field is critical — the Builder Agent reads it to decide how to lay out shapes
+9. Support Mongolian (Cyrillic) content when language is Mongolian
+10. Think like an investment analyst preparing a board-level presentation"""
+
+
+BUILDER_SYSTEM_PROMPT = f"""You are the InvesCore Slide Studio Builder. You generate python-pptx code that creates the CONTENT AREA of a single PowerPoint slide.
+
+SLIDE DIMENSIONS: 10 inches wide × 5.625 inches tall.
+
+YOUR CONTENT AREA (stay strictly within these bounds):
+  Top:    {_CONTENT_BOUNDS['top']} inches from slide top
+  Bottom: {_CONTENT_BOUNDS['bottom']} inches from slide top
+  Left:   {_CONTENT_BOUNDS['left']} inches from slide left
+  Right:  {_CONTENT_BOUNDS['right']} inches from slide left
+  → Working area ≈ {_CONTENT_BOUNDS['right'] - _CONTENT_BOUNDS['left']:.2f}" wide × {_CONTENT_BOUNDS['bottom'] - _CONTENT_BOUNDS['top']:.2f}" tall
+
+The brand frame (header bar, logo, nav bar, page number) is already on the slide — do NOT add these.
+
+BRAND COLORS (use ONLY these):
+  PRIMARY_DARK = RGBColor(0x3B, 0x3B, 0x3B)   # main text
+  WHITE        = RGBColor(0xFF, 0xFF, 0xFF)    # text on dark bg
+  ACCENT_RED   = RGBColor(0xC8, 0x10, 0x2E)   # emphasis only, use sparingly
+  LIGHT_GRAY   = RGBColor(0xA0, 0xAC, 0xBD)   # secondary / labels
+  DARK_NAVY    = RGBColor(0x0C, 0x29, 0x3B)   # dark card backgrounds
+  MEDIUM_GRAY  = RGBColor(0x66, 0x66, 0x66)   # supporting text
+  LIGHT_BG     = RGBColor(0xF5, 0xF5, 0xF5)   # subtle backgrounds
+  BORDER_GRAY  = RGBColor(0xE0, 0xE0, 0xE0)   # borders / dividers
+
+FONTS (Montserrat only):
+  Section label  :  9 pt, Regular,  LIGHT_GRAY   (e.g. "EXECUTIVE SUMMARY")
+  Slide title    : 13 pt, SemiBold, PRIMARY_DARK
+  Subtitle       :  9 pt, Regular,  MEDIUM_GRAY
+  Body / bullets :  7 pt, Regular,  PRIMARY_DARK
+  Caption        :  6 pt, Regular,  MEDIUM_GRAY
+  Big metric     : 22–28 pt, Bold,  DARK_NAVY or ACCENT_RED
+
+QUALITY STANDARDS:
+- Think like a McKinsey/Goldman designer — clear hierarchy, intentional whitespace
+- Tables: dark navy header row (white text), alternating LIGHT_BG / WHITE rows
+- Charts: brand colors for series, no gridlines unless essential, minimal axes
+- Metrics: large font (22–28 pt), card background (LIGHT_BG), label in LIGHT_GRAY below
+- Layouts must feel balanced — do not cram everything in
+- No drop shadows, no 3D, no WordArt
+
+OUTPUT FORMAT — return ONLY this Python function, no explanation, no markdown fences:
+
+def build_content(slide, Inches, Pt, Emu, RGBColor):
+    \"\"\"Build content area.\"\"\"
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+    # ... your code ...
+
+IMPORTANT:
+- All imports must be INSIDE the function
+- Use only: pptx, math, datetime, random, itertools, collections, decimal, statistics
+- Do NOT use: os, sys, subprocess, open(), exec(), eval(), requests, socket, pathlib
+- The function will be executed with exec() — it must be self-contained
+- Shape type constant for rectangles: use 1 (MSO_SHAPE_TYPE.RECTANGLE equivalent)
+- For charts, import from pptx.chart.data import ChartData and from pptx.enum.chart import XL_CHART_TYPE
+- Always add a slide title text box as the very first element
+
+EXAMPLE — metric callout slide:
+
+def build_content(slide, Inches, Pt, Emu, RGBColor):
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+
+    # Title
+    tb = slide.shapes.add_textbox(Inches(0.57), Inches(1.35), Inches(7.5), Inches(0.40))
+    tf = tb.text_frame
+    p  = tf.paragraphs[0]
+    r  = p.add_run()
+    r.text = "KEY PERFORMANCE INDICATORS"
+    r.font.name = "Montserrat"
+    r.font.size = Pt(13)
+    r.font.bold = True
+    r.font.color.rgb = RGBColor(0x3B, 0x3B, 0x3B)
+
+    metrics = [
+        ("\\u20ae15.2B", "Revenue",      "+18% YoY"),
+        ("23%",          "Market Share", "+2.1pp"),
+        ("98.5%",        "Occupancy",    "-0.3pp"),
+    ]
+    card_w = Inches(2.50); card_h = Inches(2.60)
+    gap    = Inches(0.18); top    = Inches(1.88); left0 = Inches(0.57)
+
+    for i, (value, label, delta) in enumerate(metrics):
+        left = left0 + i * (card_w + gap)
+        bg = slide.shapes.add_shape(1, left, top, card_w, card_h)
+        bg.fill.solid(); bg.fill.fore_color.rgb = RGBColor(0xF5, 0xF5, 0xF5)
+        bg.line.fill.background()
+
+        nb = slide.shapes.add_textbox(left+Inches(0.18), top+Inches(0.28), card_w-Inches(0.36), Inches(0.72))
+        tf = nb.text_frame; p = tf.paragraphs[0]; r = p.add_run()
+        r.text = value; r.font.name = "Montserrat"; r.font.size = Pt(26)
+        r.font.bold = True; r.font.color.rgb = RGBColor(0x0C, 0x29, 0x3B)
+
+        lb = slide.shapes.add_textbox(left+Inches(0.18), top+Inches(1.12), card_w-Inches(0.36), Inches(0.28))
+        tf = lb.text_frame; p = tf.paragraphs[0]; r = p.add_run()
+        r.text = label.upper(); r.font.name = "Montserrat"; r.font.size = Pt(7)
+        r.font.color.rgb = RGBColor(0xA0, 0xAC, 0xBD)
+
+        db = slide.shapes.add_textbox(left+Inches(0.18), top+Inches(1.52), card_w-Inches(0.36), Inches(0.25))
+        tf = db.text_frame; p = tf.paragraphs[0]; r = p.add_run()
+        r.text = delta; r.font.name = "Montserrat"; r.font.size = Pt(8)
+        r.font.color.rgb = RGBColor(0xC8,0x10,0x2E) if delta.startswith("+") else RGBColor(0x66,0x66,0x66)"""
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Helper — call Builder Agent (Opus)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _call_builder_agent(
+    api_key: str,
+    slide_spec: dict,
+    presentation_title: str,
+    section_name: str,
+    all_sections: list[str],
+) -> str:
+    """
+    Calls claude-opus-4-6 to generate a build_content() python-pptx function
+    for a single content slide. Returns the raw code string.
+    """
+    client = anthropic.Anthropic(api_key=api_key)
+
+    user_msg = f"""Generate build_content() for this slide:
+
+PRESENTATION: {presentation_title}
+SECTION: {section_name}
+ALL SECTIONS: {', '.join(all_sections)}
+
+SLIDE SPEC:
+{json.dumps(slide_spec, indent=2, ensure_ascii=False)}
+
+Return ONLY the Python function — no explanation, no markdown fences."""
+
+    response = client.messages.create(
+        model="claude-opus-4-6-20250415",
+        max_tokens=16000,
+        temperature=0.2,
+        system=BUILDER_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+
+    code = response.content[0].text.strip()
+    # Strip markdown fences if present
+    code = re.sub(r"^```python\s*", "", code)
+    code = re.sub(r"^```\s*",       "", code)
+    code = re.sub(r"\s*```$",       "", code)
+    return code.strip()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SSE helper
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _sse(event: str, data: Any = None) -> str:
+    """Format a Server-Sent Event string."""
+    line = f"event: {event}\n"
+    line += f"data: {json.dumps(data) if data is not None else ''}\n\n"
+    return line
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ENDPOINTS
+# ═════════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "template": str(TEMPLATE_PATH.name)}
+    return {"status": "ok", "template": str(TEMPLATE_PATH.name), "version": "2.0.0"}
 
+
+# ── Intake (unchanged) ─────────────────────────────────────────────────────────
 
 @app.post("/api/intake")
 async def intake_conversation(req: IntakeRequest):
-    """Run the conversational intake agent to gather presentation requirements."""
+    """Conversational intake agent."""
     if not req.api_key.startswith("sk-ant-"):
         raise HTTPException(400, "Invalid Anthropic API key format")
     if not req.messages:
         raise HTTPException(400, "messages cannot be empty")
-
     try:
-        client = anthropic.Anthropic(api_key=req.api_key)
+        client  = anthropic.Anthropic(api_key=req.api_key)
         message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2000,
-            temperature=0.4,
-            system=INTAKE_SYSTEM_PROMPT,
-            messages=req.messages,
+            model      = "claude-sonnet-4-6",
+            max_tokens = 2000,
+            temperature= 0.4,
+            system     = INTAKE_SYSTEM_PROMPT,
+            messages   = req.messages,
         )
         return {"content": message.content[0].text}
     except anthropic.AuthenticationError:
@@ -206,43 +399,55 @@ async def intake_conversation(req: IntakeRequest):
         raise HTTPException(500, f"Intake failed: {str(e)}")
 
 
+# ── Interpret (upgraded prompt, same endpoint) ─────────────────────────────────
+
 @app.post("/api/interpret")
 async def interpret(req: InterpretRequest):
-    """Call Interpreter Agent (Claude Sonnet) to parse the user's request into a slide plan."""
+    """
+    Interpreter Agent — converts brief into structured slide plan (v2 schema).
+    """
     if not req.api_key.startswith("sk-ant-"):
         raise HTTPException(400, "Invalid Anthropic API key format")
-
     try:
-        client = anthropic.Anthropic(api_key=req.api_key)
+        client  = anthropic.Anthropic(api_key=req.api_key)
         message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=8000,
-            temperature=0.3,
-            system=INTERPRETER_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": req.prompt}]
+            model      = "claude-sonnet-4-6",
+            max_tokens = 12000,
+            temperature= 0.3,
+            system     = INTERPRETER_SYSTEM_PROMPT,
+            messages   = [{"role": "user", "content": req.prompt}],
         )
 
-        raw_text = message.content[0].text.strip()
+        raw = message.content[0].text.strip()
+        # Strip markdown fences
+        raw = re.sub(r"^```json\s*", "", raw)
+        raw = re.sub(r"^```\s*",     "", raw)
+        raw = re.sub(r"\s*```$",     "", raw)
+        raw = raw.strip()
 
-        # Strip markdown code fences if present
-        if raw_text.startswith("```"):
-            raw_text = raw_text.split("```")[1]
-            if raw_text.startswith("json"):
-                raw_text = raw_text[4:]
-        raw_text = raw_text.strip()
+        plan = json.loads(raw)
 
-        plan = json.loads(raw_text)
+        # Count total content slides for cost estimate
+        total_content = sum(
+            len(sec.get("slides", []))
+            for sec in plan.get("sections", [])
+        )
 
         return {
             "presentation_title": plan.get("presentation_title", "Presentation"),
-            "slides": plan.get("slides", []),
+            "sections":           plan.get("sections", []),
             "token_usage": {
-                "input_tokens": message.usage.input_tokens,
-                "output_tokens": message.usage.output_tokens,
+                "input_tokens":       message.usage.input_tokens,
+                "output_tokens":      message.usage.output_tokens,
                 "estimated_cost_usd": round(
-                    (message.usage.input_tokens * 3 + message.usage.output_tokens * 15) / 1_000_000, 4
-                )
-            }
+                    (message.usage.input_tokens * 3 +
+                     message.usage.output_tokens * 15) / 1_000_000, 4
+                ),
+            },
+            "total_content_slides": total_content,
+            "estimated_builder_cost_usd": round(
+                total_content * (2000 * 15 + 3000 * 75) / 1_000_000, 2
+            ),
         }
 
     except json.JSONDecodeError as e:
@@ -255,39 +460,164 @@ async def interpret(req: InterpretRequest):
         raise HTTPException(500, f"Interpretation failed: {str(e)}")
 
 
+# ── V1 Generate (unchanged — kept for backwards compat) ────────────────────────
+
 @app.post("/api/generate")
 async def generate(req: GenerateRequest):
-    """Generate a .pptx file from a slide plan."""
+    """V1: Generate .pptx from flat slide_plan (clone + text swap)."""
     if not req.api_key.startswith("sk-ant-"):
         raise HTTPException(400, "Invalid Anthropic API key format")
-
     if not req.slide_plan:
         raise HTTPException(400, "slide_plan cannot be empty")
-
     try:
         engine = InvescoreTemplateEngine(str(TEMPLATE_PATH), str(BRAND_GUIDE_PATH))
         output_path = engine.create_presentation(req.slide_plan)
 
-        # Determine filename from first slide's content
         title = "presentation"
         if req.slide_plan and req.slide_plan[0].get("content", {}).get("presentation_title"):
-            raw = req.slide_plan[0]["content"]["presentation_title"]
+            raw   = req.slide_plan[0]["content"]["presentation_title"]
             title = raw[:40].replace("/", "-").replace("\\", "-").replace(" ", "_")
 
         filename = f"InvesCore_{title}.pptx"
-
         return FileResponse(
-            path=output_path,
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            filename=filename,
-            background=None,  # Let FastAPI handle cleanup
+            path        = output_path,
+            media_type  = "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            filename    = filename,
+            background  = None,
         )
-
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"Generation failed: {str(e)}")
 
+
+# ── V2 Generate — SSE streaming, Builder Agent per slide ──────────────────────
+
+@app.post("/api/generate_v2")
+async def generate_v2(req: GenerateV2Request):
+    """
+    V2: Hybrid generate with per-slide Builder Agent calls.
+    Streams Server-Sent Events so the frontend can show per-slide progress.
+
+    Event types:
+      interpreting          — starting (no data)
+      building_slide        — {current, total, title}
+      slide_error           — {slide_index, title, error}  (non-fatal)
+      finalizing            — assembling .pptx (no data)
+      done                  — {filename}   (triggers frontend to call /api/download)
+      error                 — {message}    (fatal, stream ends)
+    """
+    if not req.api_key.startswith("sk-ant-"):
+        raise HTTPException(400, "Invalid Anthropic API key format")
+    if not req.slide_plan:
+        raise HTTPException(400, "slide_plan cannot be empty")
+
+    slide_plan = req.slide_plan
+    api_key    = req.api_key
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        try:
+            yield _sse("interpreting")
+
+            # ── Collect all content slides ────────────────────────────────
+            all_sections   = [s["name"] for s in slide_plan.get("sections", [])]
+            content_slides = []   # (section_name, slide_spec, content_idx)
+            for section in slide_plan.get("sections", []):
+                for slide_spec in section.get("slides", []):
+                    if slide_spec.get("slide_type", "content") == "content":
+                        content_slides.append(
+                            (section["name"], slide_spec, len(content_slides))
+                        )
+
+            total = len(content_slides)
+            content_code_map: dict[int, str] = {}
+
+            # ── Call Builder Agent for each content slide ─────────────────
+            for current_num, (section_name, slide_spec, cidx) in enumerate(
+                content_slides, start=1
+            ):
+                title = slide_spec.get("title", f"Slide {current_num}")
+                yield _sse("building_slide", {
+                    "current": current_num,
+                    "total":   total,
+                    "title":   title,
+                })
+
+                try:
+                    code = _call_builder_agent(
+                        api_key            = api_key,
+                        slide_spec         = slide_spec,
+                        presentation_title = slide_plan.get("presentation_title", ""),
+                        section_name       = section_name,
+                        all_sections       = all_sections,
+                    )
+                    content_code_map[cidx] = code
+                except Exception as build_err:
+                    yield _sse("slide_error", {
+                        "slide_index": cidx,
+                        "title":       title,
+                        "error":       str(build_err),
+                    })
+                    # Fallback: empty string → engine will use fallback title
+                    content_code_map[cidx] = ""
+
+            # ── Assemble .pptx ────────────────────────────────────────────
+            yield _sse("finalizing")
+
+            engine      = InvescoreTemplateEngine(str(TEMPLATE_PATH), str(BRAND_GUIDE_PATH))
+            output_path = engine.create_presentation_v2(slide_plan, content_code_map)
+
+            # Derive filename
+            raw_title = slide_plan.get("presentation_title", "Presentation")
+            safe      = raw_title[:40].replace("/", "-").replace("\\", "-").replace(" ", "_")
+            filename  = f"InvesCore_{safe}.pptx"
+
+            # Move to a stable temp path keyed by filename so /api/download can serve it
+            stable_path = str(BASE_DIR / "tmp" / filename)
+            import shutil, os
+            os.makedirs(str(BASE_DIR / "tmp"), exist_ok=True)
+            shutil.move(output_path, stable_path)
+
+            yield _sse("done", {"filename": filename})
+
+        except anthropic.AuthenticationError:
+            yield _sse("error", {"message": "Invalid API key"})
+        except anthropic.RateLimitError:
+            yield _sse("error", {"message": "API rate limit exceeded"})
+        except Exception as e:
+            yield _sse("error", {"message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control":             "no-cache",
+            "X-Accel-Buffering":         "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+# ── Download endpoint (serves the assembled .pptx after SSE done) ─────────────
+
+@app.get("/api/download/{filename}")
+async def download(filename: str):
+    """Serve the generated .pptx file."""
+    # Sanitise filename — no path traversal
+    safe_name = Path(filename).name
+    if not safe_name.endswith(".pptx"):
+        raise HTTPException(400, "Invalid filename")
+    file_path = BASE_DIR / "tmp" / safe_name
+    if not file_path.exists():
+        raise HTTPException(404, "File not found — may have expired")
+    return FileResponse(
+        path       = str(file_path),
+        media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename   = safe_name,
+    )
+
+
+# ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn

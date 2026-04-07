@@ -3,10 +3,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import Image from 'next/image';
 import type {
-  SlideSpec, SlidePlan, Step, TokenUsage,
+  V2SlidePlan, Step, TokenUsage, BuildProgress,
   ChatMessage, IntakeData, IntakeMode,
+  InterpretResponse,
 } from '@/lib/types';
-import { BACKEND_URL, TEMPLATE_CATEGORIES } from '@/lib/constants';
+import { BACKEND_URL } from '@/lib/constants';
 
 // ── Example prompts ────────────────────────────────────────────────────────────
 const EXAMPLES = [
@@ -20,11 +21,15 @@ const EXAMPLES = [
 type StepState = 'done' | 'active' | 'pending';
 interface ProgressItem { label: string; state: StepState; }
 
-function buildProgress(step: Step, slideCount?: number): ProgressItem[] {
+function buildProgress(step: Step, buildProgress?: BuildProgress | null): ProgressItem[] {
+  const buildLabel = buildProgress
+    ? `Building slide ${buildProgress.current} of ${buildProgress.total} — ${buildProgress.title}`
+    : 'Building slides';
+
   const items: ProgressItem[] = [
     { label: 'Interpreting request', state: 'pending' },
-    { label: slideCount ? `Planning ${slideCount} slides` : 'Planning slides', state: 'pending' },
-    { label: 'Building presentation', state: 'pending' },
+    { label: 'Planning slides', state: 'pending' },
+    { label: buildLabel, state: 'pending' },
     { label: 'Finalizing', state: 'pending' },
   ];
   if (step === 'interpreting') {
@@ -45,7 +50,8 @@ export default function HomePage() {
   const [apiKey, setApiKey] = useState('');
   const [prompt, setPrompt] = useState('');
   const [step, setStep] = useState<Step>('idle');
-  const [plan, setPlan] = useState<SlidePlan | null>(null);
+  const [plan, setPlan] = useState<V2SlidePlan | null>(null);
+  const [buildProg, setBuildProg] = useState<BuildProgress | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadFilename, setDownloadFilename] = useState('presentation.pptx');
   const [error, setError] = useState<string | null>(null);
@@ -182,7 +188,7 @@ export default function HomePage() {
   }, []);
 
   // ── Presentation generation ─────────────────────────────────────────────────
-  const doInterpret = useCallback(async (promptOverride?: string): Promise<SlidePlan | null> => {
+  const doInterpret = useCallback(async (promptOverride?: string): Promise<V2SlidePlan | null> => {
     setStep('interpreting');
     const actualPrompt = promptOverride ?? prompt.trim();
     const res = await fetch(`${BACKEND_URL}/api/interpret`, {
@@ -194,44 +200,82 @@ export default function HomePage() {
       const err = await res.json().catch(() => ({}));
       throw new Error((err as { detail?: string }).detail || `Interpretation failed (${res.status})`);
     }
-    const data = await res.json() as { presentation_title: string; slides: SlideSpec[]; token_usage: TokenUsage };
-    const newPlan: SlidePlan = { presentation_title: data.presentation_title, slides: data.slides };
+    const data = await res.json() as InterpretResponse;
+    const newPlan: V2SlidePlan = {
+      presentation_title: data.presentation_title,
+      sections: data.sections,
+    };
     setTokenUsage(data.token_usage);
     setPlan(newPlan);
     return newPlan;
   }, [apiKey, prompt]);
 
-  const doBuild = useCallback(async (slides: SlideSpec[]) => {
+  const doBuildV2 = useCallback(async (slidePlan: V2SlidePlan) => {
     setStep('building');
-    const res = await fetch(`${BACKEND_URL}/api/generate`, {
+    setBuildProg(null);
+
+    const res = await fetch(`${BACKEND_URL}/api/generate_v2`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: apiKey.trim(), slide_plan: slides }),
+      body: JSON.stringify({ api_key: apiKey.trim(), slide_plan: slidePlan }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error((err as { detail?: string }).detail || `Generation failed (${res.status})`);
     }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const cd = res.headers.get('content-disposition') || '';
-    const match = cd.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-    setDownloadUrl(url);
-    setDownloadFilename(match ? match[1].replace(/['"]/g, '') : 'InvesCore_Presentation.pptx');
-    setStep('done');
+
+    // Parse SSE stream
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error('No response stream');
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() ?? '';
+
+      for (const chunk of lines) {
+        const eventMatch = chunk.match(/^event: (.+)/m);
+        const dataMatch  = chunk.match(/^data: (.+)/m);
+        const eventType  = eventMatch?.[1]?.trim();
+        let data: Record<string, unknown> = {};
+        if (dataMatch?.[1]?.trim()) {
+          try { data = JSON.parse(dataMatch[1].trim()); } catch { /* ignore */ }
+        }
+
+        if (eventType === 'building_slide') {
+          setBuildProg({
+            current: data.current as number,
+            total:   data.total   as number,
+            title:   data.title   as string,
+          });
+        } else if (eventType === 'done') {
+          const filename = data.filename as string;
+          setDownloadFilename(filename);
+          setDownloadUrl(`${BACKEND_URL}/api/download/${encodeURIComponent(filename)}`);
+          setStep('done');
+          setBuildProg(null);
+        } else if (eventType === 'error') {
+          throw new Error((data.message as string) || 'Generation failed');
+        }
+      }
+    }
   }, [apiKey]);
 
   const handleGenerate = useCallback(async (promptOverride?: string) => {
     if (isWorking) return;
-    setError(null); setDownloadUrl(null); setPlan(null);
+    setError(null); setDownloadUrl(null); setPlan(null); setBuildProg(null);
     try {
       const newPlan = await doInterpret(promptOverride);
-      if (newPlan) await doBuild(newPlan.slides);
+      if (newPlan) await doBuildV2(newPlan);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Unknown error');
       setStep('error');
     }
-  }, [isWorking, doInterpret, doBuild]);
+  }, [isWorking, doInterpret, doBuildV2]);
 
   const handleGenerateFromIntake = useCallback(() => {
     if (!intakeData) return;
@@ -241,12 +285,12 @@ export default function HomePage() {
   const handleBuildFromPlan = useCallback(async () => {
     if (!plan) return;
     setError(null);
-    try { await doBuild(plan.slides); }
+    try { await doBuildV2(plan); }
     catch (e: unknown) { setError(e instanceof Error ? e.message : 'Unknown error'); setStep('error'); }
-  }, [plan, doBuild]);
+  }, [plan, doBuildV2]);
 
   const handleReset = useCallback(() => {
-    setStep('idle'); setPlan(null); setDownloadUrl(null); setError(null);
+    setStep('idle'); setPlan(null); setDownloadUrl(null); setError(null); setBuildProg(null);
     handleStartOver();
   }, [handleStartOver]);
 
@@ -261,7 +305,7 @@ export default function HomePage() {
     }
   }, [isWorking, intakeMode, startConversation]);
 
-  const progressItems = buildProgress(step, plan?.slides.length);
+  const progressItems = buildProgress(step, buildProg);
   const showProgress = step !== 'idle' && step !== 'error';
 
   return (
@@ -893,67 +937,49 @@ export default function HomePage() {
               border: '1px solid #EBEBEB',
               padding: 32,
             }}>
-              {(() => {
-                type Group = { sectionName: string; slides: { template: string; label: string }[] };
-                const groups: Group[] = [];
-                let currentGroup: Group = { sectionName: 'Presentation', slides: [] };
-
-                for (const slide of plan.slides) {
-                  if (slide.template === 'section_divider') {
-                    if (currentGroup.slides.length > 0) groups.push(currentGroup);
-                    const name = slide.content?.section_title || 'Section';
-                    currentGroup = { sectionName: name, slides: [] };
-                  } else {
-                    const label =
-                      slide.content?.presentation_title ||
-                      slide.content?.title ||
-                      slide.content?.closing_message ||
-                      Object.values(slide.content || {})[0] ||
-                      TEMPLATE_CATEGORIES[slide.template] ||
-                      slide.template;
-                    currentGroup.slides.push({ template: slide.template, label: String(label) });
-                  }
-                }
-                if (currentGroup.slides.length > 0) groups.push(currentGroup);
-
-                return groups.map((group, gi) => (
-                  <div key={gi} style={{ marginBottom: gi < groups.length - 1 ? 24 : 0 }}>
-                    <div style={{
-                      fontSize: 10,
-                      fontWeight: 500,
-                      letterSpacing: '0.12em',
-                      textTransform: 'uppercase',
-                      color: '#C8102E',
-                      marginBottom: 10,
-                    }}>
-                      {group.sectionName}
-                    </div>
-                    {group.slides.map((s, si) => (
-                      <div
-                        key={si}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 10,
-                          paddingLeft: 16,
-                          marginBottom: si < group.slides.length - 1 ? 8 : 0,
-                        }}
-                      >
-                        <span style={{
-                          width: 3,
-                          height: 3,
-                          background: '#CCCCCC',
-                          flexShrink: 0,
-                          display: 'inline-block',
-                        }} />
-                        <span style={{ fontSize: 13, fontWeight: 400, color: '#8C8C8C', lineHeight: 1.5 }}>
-                          {s.label}
-                        </span>
-                      </div>
-                    ))}
+              {plan.sections.map((section, gi) => (
+                <div key={gi} style={{ marginBottom: gi < plan.sections.length - 1 ? 24 : 0 }}>
+                  <div style={{
+                    fontSize: 10,
+                    fontWeight: 500,
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                    color: '#C8102E',
+                    marginBottom: 10,
+                  }}>
+                    {section.name}
                   </div>
-                ));
-              })()}
+                  {section.slides.map((s, si) => (
+                    <div
+                      key={si}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        paddingLeft: 16,
+                        marginBottom: si < section.slides.length - 1 ? 8 : 0,
+                      }}
+                    >
+                      <span style={{
+                        width: 3,
+                        height: 3,
+                        background: s.slide_type === 'section_divider' ? '#C8102E' : '#CCCCCC',
+                        flexShrink: 0,
+                        display: 'inline-block',
+                      }} />
+                      <span style={{
+                        fontSize: 13,
+                        fontWeight: 400,
+                        color: s.slide_type === 'section_divider' ? '#8C8C8C' : '#8C8C8C',
+                        lineHeight: 1.5,
+                        fontStyle: s.slide_type === 'section_divider' ? 'italic' : 'normal',
+                      }}>
+                        {s.title}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ))}
             </div>
 
             {step === 'plan_ready' && (
@@ -1006,7 +1032,7 @@ export default function HomePage() {
         {/* ── Download ── */}
         {step === 'done' && downloadUrl && (
           <div className="download-section" style={{ marginTop: 48 }}>
-            <a href={downloadUrl} download={downloadFilename} style={{ textDecoration: 'none', display: 'block' }}>
+            <a href={downloadUrl} download={downloadFilename} target="_blank" rel="noreferrer" style={{ textDecoration: 'none', display: 'block' }}>
               <button
                 className="btn-download"
                 style={{
