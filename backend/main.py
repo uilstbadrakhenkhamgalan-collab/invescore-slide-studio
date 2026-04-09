@@ -412,7 +412,7 @@ async def interpret(req: InterpretRequest):
         client  = anthropic.Anthropic(api_key=req.api_key)
         message = client.messages.create(
             model      = "claude-sonnet-4-6",
-            max_tokens = 12000,
+            max_tokens = 32000,
             temperature= 0.3,
             system     = INTERPRETER_SYSTEM_PROMPT,
             messages   = [{"role": "user", "content": req.prompt}],
