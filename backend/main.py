@@ -1,6 +1,7 @@
 """
 InvesCore Slide Studio — FastAPI Backend v2
 """
+import asyncio
 import io
 import json
 import re
@@ -409,17 +410,27 @@ async def interpret(req: InterpretRequest):
     if not req.api_key.startswith("sk-ant-"):
         raise HTTPException(400, "Invalid Anthropic API key format")
     try:
-        client  = anthropic.Anthropic(api_key=req.api_key)
-        with client.messages.stream(
-            model      = "claude-sonnet-4-6",
-            max_tokens = 32000,
-            temperature= 0.3,
-            system     = INTERPRETER_SYSTEM_PROMPT,
-            messages   = [{"role": "user", "content": req.prompt}],
-        ) as stream:
-            raw     = stream.get_final_text()
-            final   = stream.get_final_message()
-            usage   = final.usage
+        client = anthropic.Anthropic(api_key=req.api_key)
+
+        # Retry up to 3 times on overloaded errors with exponential backoff
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                with client.messages.stream(
+                    model      = "claude-sonnet-4-6",
+                    max_tokens = 32000,
+                    temperature= 0.3,
+                    system     = INTERPRETER_SYSTEM_PROMPT,
+                    messages   = [{"role": "user", "content": req.prompt}],
+                ) as stream:
+                    raw   = stream.get_final_text()
+                    usage = stream.get_final_message().usage
+                break  # success
+            except anthropic.APIStatusError as e:
+                if e.status_code == 529 and attempt < max_retries - 1:
+                    await asyncio.sleep(5 * (attempt + 1))
+                    continue
+                raise
 
         raw = raw.strip()
         # Strip markdown fences
@@ -459,6 +470,10 @@ async def interpret(req: InterpretRequest):
         raise HTTPException(401, "Invalid API key")
     except anthropic.RateLimitError:
         raise HTTPException(429, "API rate limit exceeded")
+    except anthropic.APIStatusError as e:
+        if e.status_code == 529:
+            raise HTTPException(503, "Anthropic API is overloaded — please try again in a moment")
+        raise HTTPException(500, f"Interpretation failed: {str(e)}")
     except Exception as e:
         raise HTTPException(500, f"Interpretation failed: {str(e)}")
 
