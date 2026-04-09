@@ -410,15 +410,18 @@ async def interpret(req: InterpretRequest):
         raise HTTPException(400, "Invalid Anthropic API key format")
     try:
         client  = anthropic.Anthropic(api_key=req.api_key)
-        message = client.messages.create(
+        with client.messages.stream(
             model      = "claude-sonnet-4-6",
             max_tokens = 32000,
             temperature= 0.3,
             system     = INTERPRETER_SYSTEM_PROMPT,
             messages   = [{"role": "user", "content": req.prompt}],
-        )
+        ) as stream:
+            raw     = stream.get_final_text()
+            final   = stream.get_final_message()
+            usage   = final.usage
 
-        raw = message.content[0].text.strip()
+        raw = raw.strip()
         # Strip markdown fences
         raw = re.sub(r"^```json\s*", "", raw)
         raw = re.sub(r"^```\s*",     "", raw)
@@ -437,11 +440,11 @@ async def interpret(req: InterpretRequest):
             "presentation_title": plan.get("presentation_title", "Presentation"),
             "sections":           plan.get("sections", []),
             "token_usage": {
-                "input_tokens":       message.usage.input_tokens,
-                "output_tokens":      message.usage.output_tokens,
+                "input_tokens":       usage.input_tokens,
+                "output_tokens":      usage.output_tokens,
                 "estimated_cost_usd": round(
-                    (message.usage.input_tokens * 3 +
-                     message.usage.output_tokens * 15) / 1_000_000, 4
+                    (usage.input_tokens * 3 +
+                     usage.output_tokens * 15) / 1_000_000, 4
                 ),
             },
             "total_content_slides": total_content,
