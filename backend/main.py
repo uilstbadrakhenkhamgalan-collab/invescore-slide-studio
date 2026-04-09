@@ -412,8 +412,13 @@ async def interpret(req: InterpretRequest):
     try:
         client = anthropic.Anthropic(api_key=req.api_key)
 
+        def _is_overloaded(exc: Exception) -> bool:
+            s = str(exc).lower()
+            return "overloaded" in s or (hasattr(exc, "status_code") and exc.status_code == 529)
+
         # Retry up to 3 times on overloaded errors with exponential backoff
         max_retries = 3
+        last_exc: Exception | None = None
         for attempt in range(max_retries):
             try:
                 with client.messages.stream(
@@ -425,12 +430,16 @@ async def interpret(req: InterpretRequest):
                 ) as stream:
                     raw   = stream.get_final_text()
                     usage = stream.get_final_message().usage
+                last_exc = None
                 break  # success
-            except anthropic.APIStatusError as e:
-                if e.status_code == 529 and attempt < max_retries - 1:
+            except Exception as e:
+                if _is_overloaded(e) and attempt < max_retries - 1:
+                    last_exc = e
                     await asyncio.sleep(5 * (attempt + 1))
                     continue
                 raise
+        if last_exc is not None:
+            raise HTTPException(503, "Anthropic API is overloaded — please try again in a moment")
 
         raw = raw.strip()
         # Strip markdown fences
@@ -470,11 +479,9 @@ async def interpret(req: InterpretRequest):
         raise HTTPException(401, "Invalid API key")
     except anthropic.RateLimitError:
         raise HTTPException(429, "API rate limit exceeded")
-    except anthropic.APIStatusError as e:
-        if e.status_code == 529:
-            raise HTTPException(503, "Anthropic API is overloaded — please try again in a moment")
-        raise HTTPException(500, f"Interpretation failed: {str(e)}")
     except Exception as e:
+        if "overloaded" in str(e).lower() or (hasattr(e, "status_code") and e.status_code == 529):
+            raise HTTPException(503, "Anthropic API is overloaded — please try again in a moment")
         raise HTTPException(500, f"Interpretation failed: {str(e)}")
 
 
