@@ -338,7 +338,7 @@ SLIDE SPEC:
 Return ONLY the Python function — no explanation, no markdown fences."""
 
     response = client.messages.create(
-        model="claude-opus-4-6-20250415",
+        model="claude-opus-4-6",
         max_tokens=16000,
         temperature=0.2,
         system=BUILDER_SYSTEM_PROMPT,
