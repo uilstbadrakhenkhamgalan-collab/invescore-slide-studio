@@ -10,6 +10,7 @@ import copy
 import shutil
 import tempfile
 import threading
+import traceback
 import zipfile
 import re
 from lxml import etree
@@ -209,15 +210,22 @@ class InvescoreTemplateEngine:
         self._apply_agenda_v2(prs.slides[1], slide_plan["sections"], start_page=3)
 
         # Content and section-divider slides
+        last_slide_label = "unknown"
         for (pidx, section_name, slide_spec, stype, cidx) in slide_meta:
             slide = prs.slides[pidx]
             page_number = pidx + 1  # 1-based
+            slide_title = slide_spec.get("title", f"Slide {page_number}")
+            slide_label = f"slide={page_number} section='{section_name}' title='{slide_title}'"
+            last_slide_label = slide_label
+
+            print(f"[engine] Processing {slide_label} type={stype} cidx={cidx}")
 
             if stype == "section_divider":
                 self._apply_content(slide, "section_divider", {
                     "section_title":       slide_spec.get("title", section_name),
                     "section_description": slide_spec.get("description", ""),
                 })
+                print(f"[engine] Section divider applied — {slide_label}")
             else:
                 # Strip content-area shapes, leaving the brand frame intact
                 self._clear_content_area(slide)
@@ -226,15 +234,34 @@ class InvescoreTemplateEngine:
                 # Execute AI-generated python-pptx code
                 code = content_code_map.get(cidx, "")
                 if code:
-                    success = self._execute_content_code(slide, code)
+                    success = self._execute_content_code(slide, code, slide_label)
                     if not success:
-                        # Fallback: add a plain title text box so the slide isn't blank
-                        self._add_fallback_title(
-                            slide, slide_spec.get("title", "")
-                        )
+                        print(f"[engine] Using fallback title for {slide_label}")
+                        self._add_fallback_title(slide, slide_title)
+                    else:
+                        print(f"[engine] Content built successfully for {slide_label}")
+                else:
+                    print(f"[engine] No code for cidx={cidx} — using fallback title")
+                    self._add_fallback_title(slide, slide_title)
 
         # Closing: no text changes (zero swaps)
+        print(f"[engine] Saving .pptx to {output_path}")
         prs.save(output_path)
+
+        # ── Validate: re-open to confirm the file is not corrupt ─────────────
+        print(f"[engine] Validating saved .pptx...")
+        try:
+            test_prs = Presentation(output_path)
+            slide_count = len(test_prs.slides)
+            print(f"[engine] Validation OK — {slide_count} slides readable")
+        except Exception as val_exc:
+            print(f"[engine] VALIDATION FAILED — last slide was: {last_slide_label}")
+            print(f"[engine] Validation error: {val_exc}")
+            raise RuntimeError(
+                f"Generated .pptx is corrupt (failed to re-open): {val_exc}. "
+                f"Last slide processed: {last_slide_label}"
+            )
+
         return output_path
 
     def get_content_area_bounds(self) -> dict:
@@ -410,7 +437,7 @@ class InvescoreTemplateEngine:
                 return False, f"blocked token: {token!r}"
         return True, ""
 
-    def _execute_content_code(self, slide, code_string: str) -> bool:
+    def _execute_content_code(self, slide, code_string: str, slide_label: str = "") -> bool:
         """
         Execute Builder Agent's python-pptx code inside a safety sandbox.
 
@@ -422,13 +449,31 @@ class InvescoreTemplateEngine:
         2. Restricted __import__ — only pptx, math, datetime, etc.
         3. Restricted builtins — no open(), exec(), eval(), globals()…
         4. Threading timeout — 10 s hard limit per slide
+        5. Rollback — any shapes added before a crash are removed
+        6. XML sanity check — slide XML must be serialisable after exec
 
         Returns True on success, False on any rejection / error / timeout.
         """
+        prefix = f"[builder{' ' + slide_label if slide_label else ''}]"
+
+        # ── Log the raw code ─────────────────────────────────────────────────
+        print(f"{prefix} Code received ({len(code_string)} chars):")
+        print(f"{prefix} --- CODE START ---")
+        print(code_string[:2000])
+        if len(code_string) > 2000:
+            print(f"{prefix} ... (truncated, {len(code_string) - 2000} more chars)")
+        print(f"{prefix} --- CODE END ---")
+
+        # ── Static validation ────────────────────────────────────────────────
         is_safe, reason = self._validate_code(code_string)
         if not is_safe:
-            print(f"[builder] Code rejected — {reason}")
+            print(f"{prefix} VALIDATION FAILED — {reason}")
             return False
+        print(f"{prefix} Validation passed")
+
+        # ── Snapshot existing shape elements for rollback ────────────────────
+        sp_tree = slide.shapes._spTree
+        before_elem_ids = set(id(elem) for elem in list(sp_tree))
 
         result     = [False]
         exc_holder = [None]
@@ -465,7 +510,7 @@ class InvescoreTemplateEngine:
                 exec(code_string, namespace)   # noqa: S102
                 build_fn = namespace.get("build_content")
                 if build_fn is None:
-                    print("[builder] No build_content function found in code")
+                    print(f"{prefix} No build_content function found in code")
                     return
                 build_fn(slide, Inches, Pt, Emu, RGBColor)
                 result[0] = True
@@ -477,14 +522,41 @@ class InvescoreTemplateEngine:
         thread.join(timeout=_EXEC_TIMEOUT_SEC)
 
         if thread.is_alive():
-            print(
-                f"[builder] Timed out after {_EXEC_TIMEOUT_SEC}s "
-                f"— slide will show brand frame + fallback title"
-            )
+            print(f"{prefix} TIMED OUT after {_EXEC_TIMEOUT_SEC}s — rolling back and using fallback title")
+            # Rollback any partially-added shapes
+            for elem in list(sp_tree):
+                if id(elem) not in before_elem_ids:
+                    sp_tree.remove(elem)
             return False
 
         if exc_holder[0]:
-            print(f"[builder] Execution error: {exc_holder[0]}")
+            exc = exc_holder[0]
+            print(f"{prefix} EXECUTION FAILED:")
+            print(f"{prefix}   {type(exc).__name__}: {exc}")
+            print(f"{prefix}   Traceback:")
+            tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+            for line in tb_lines:
+                for subline in line.splitlines():
+                    print(f"{prefix}     {subline}")
+            # Rollback any partially-added shapes
+            removed = 0
+            for elem in list(sp_tree):
+                if id(elem) not in before_elem_ids:
+                    sp_tree.remove(elem)
+                    removed += 1
+            print(f"{prefix}   Rolled back {removed} partially-added shape(s)")
+            return False
+
+        # ── XML sanity check ─────────────────────────────────────────────────
+        try:
+            etree.tostring(slide._element)
+            print(f"{prefix} Execution OK — XML sanity check passed")
+        except Exception as xml_exc:
+            print(f"{prefix} XML SANITY CHECK FAILED after execution: {xml_exc}")
+            # Rollback
+            for elem in list(sp_tree):
+                if id(elem) not in before_elem_ids:
+                    sp_tree.remove(elem)
             return False
 
         return result[0]
