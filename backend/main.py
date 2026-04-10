@@ -576,13 +576,7 @@ async def generate_v2(req: GenerateV2Request):
                         section_name       = section_name,
                         all_sections       = all_sections,
                     )
-                    print(f"[main] Builder Agent returned code for slide {current_num}/{total} "
-                          f"section='{section_name}' title='{title}' ({len(code)} chars)")
-                    print(f"[main] --- BUILDER CODE slide {current_num} ---")
-                    print(code[:2000])
-                    if len(code) > 2000:
-                        print(f"[main] ... (truncated)")
-                    print(f"[main] --- END BUILDER CODE slide {current_num} ---")
+                    print(f"[main] slide {current_num}/{total} OK — {len(code)} chars — '{title}'")
                     content_code_map[cidx] = code
                 except Exception as build_err:
                     print(f"[main] Builder Agent FAILED for slide {current_num}/{total} "

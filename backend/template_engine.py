@@ -456,20 +456,12 @@ class InvescoreTemplateEngine:
         """
         prefix = f"[builder{' ' + slide_label if slide_label else ''}]"
 
-        # ── Log the raw code ─────────────────────────────────────────────────
-        print(f"{prefix} Code received ({len(code_string)} chars):")
-        print(f"{prefix} --- CODE START ---")
-        print(code_string[:2000])
-        if len(code_string) > 2000:
-            print(f"{prefix} ... (truncated, {len(code_string) - 2000} more chars)")
-        print(f"{prefix} --- CODE END ---")
-
         # ── Static validation ────────────────────────────────────────────────
         is_safe, reason = self._validate_code(code_string)
         if not is_safe:
             print(f"{prefix} VALIDATION FAILED — {reason}")
+            print(f"{prefix} Rejected code (first 500 chars): {code_string[:500]}")
             return False
-        print(f"{prefix} Validation passed")
 
         # ── Snapshot existing shape elements for rollback ────────────────────
         sp_tree = slide.shapes._spTree
@@ -609,12 +601,17 @@ class InvescoreTemplateEngine:
             slide_pattern      = re.compile(r"^ppt/slides/slide\d+\.xml$")
             slide_rels_pattern = re.compile(r"^ppt/slides/_rels/slide\d+\.xml\.rels$")
 
+            # Parse [Content_Types].xml so we can rebuild it accurately
+            NS_CT = "http://schemas.openxmlformats.org/package/2006/content-types"
+            ct_xml = etree.fromstring(src_zip.read("[Content_Types].xml"))
+
             with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as dst_zip:
-                # Copy all non-slide files verbatim
+                # Copy all non-slide, non-content-types files verbatim
                 for name in src_zip.namelist():
                     if name in (
                         "ppt/presentation.xml",
                         "ppt/_rels/presentation.xml.rels",
+                        "[Content_Types].xml",
                     ):
                         continue
                     if slide_pattern.match(name) or slide_rels_pattern.match(name):
@@ -641,6 +638,30 @@ class InvescoreTemplateEngine:
 
                     new_slide_targets.append(new_target)
                     new_slide_rids.append(f"rId_slide{new_num}")
+
+                # Write updated [Content_Types].xml — remove stale slide Override
+                # entries and add exact entries for the slides we actually generated.
+                SLIDE_CT = (
+                    "application/vnd.openxmlformats-officedocument"
+                    ".presentationml.slide+xml"
+                )
+                slide_part_re = re.compile(r"^/ppt/slides/slide\d+\.xml$")
+                for override in list(ct_xml.findall(f"{{{NS_CT}}}Override")):
+                    if slide_part_re.match(override.get("PartName", "")):
+                        ct_xml.remove(override)
+                for i in range(len(desired_zippaths)):
+                    elem = etree.SubElement(ct_xml, f"{{{NS_CT}}}Override")
+                    elem.set("PartName", f"/ppt/slides/slide{i + 1}.xml")
+                    elem.set("ContentType", SLIDE_CT)
+                dst_zip.writestr(
+                    "[Content_Types].xml",
+                    etree.tostring(
+                        ct_xml,
+                        xml_declaration=True,
+                        encoding="UTF-8",
+                        standalone=True,
+                    ),
+                )
 
                 # Write updated presentation.xml
                 new_prs_xml = self._update_presentation_xml(prs_xml, new_slide_rids)
