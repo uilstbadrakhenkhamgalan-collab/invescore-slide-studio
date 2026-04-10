@@ -5,7 +5,7 @@ import Image from 'next/image';
 import type {
   V2SlidePlan, Step, TokenUsage, BuildProgress,
   ChatMessage, IntakeData, IntakeMode,
-  InterpretResponse,
+  InterpretResponse, HistoryEntry,
 } from '@/lib/types';
 import { BACKEND_URL } from '@/lib/constants';
 
@@ -67,6 +67,9 @@ export default function HomePage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
 
+  // ── Local history ─────────────────────────────────────────────────────────
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+
   const hasApiKey = apiKey.trim().length > 10;
   const isWorking = step === 'interpreting' || step === 'building';
   const canGenerateFromTextarea = hasApiKey && prompt.trim().length > 5 && !isWorking;
@@ -76,6 +79,21 @@ export default function HomePage() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages, isTyping]);
+
+  // ── Load persisted data on mount ─────────────────────────────────────────
+  useEffect(() => {
+    try {
+      const savedKey = localStorage.getItem('invescore_api_key');
+      if (savedKey) setApiKey(savedKey);
+      const savedHistory = localStorage.getItem('invescore_history');
+      if (savedHistory) setHistory(JSON.parse(savedHistory));
+    } catch { /* ignore */ }
+  }, []);
+
+  // ── Persist API key on change ────────────────────────────────────────────
+  useEffect(() => {
+    try { localStorage.setItem('invescore_api_key', apiKey); } catch { /* ignore */ }
+  }, [apiKey]);
 
   // ── Intake API call ─────────────────────────────────────────────────────────
   const callIntakeAPI = useCallback(async (messages: ChatMessage[]): Promise<string> => {
@@ -268,14 +286,29 @@ export default function HomePage() {
   const handleGenerate = useCallback(async (promptOverride?: string) => {
     if (isWorking) return;
     setError(null); setDownloadUrl(null); setPlan(null); setBuildProg(null);
+    const brief = promptOverride ?? prompt.trim();
     try {
       const newPlan = await doInterpret(promptOverride);
-      if (newPlan) await doBuildV2(newPlan);
+      if (newPlan) {
+        await doBuildV2(newPlan);
+        const entry: HistoryEntry = {
+          id: Date.now().toString(),
+          date: new Date().toISOString(),
+          title: newPlan.presentation_title,
+          brief,
+          intakeData: intakeData ?? undefined,
+        };
+        setHistory(prev => {
+          const next = [entry, ...prev].slice(0, 20);
+          try { localStorage.setItem('invescore_history', JSON.stringify(next)); } catch { /* ignore */ }
+          return next;
+        });
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Unknown error');
       setStep('error');
     }
-  }, [isWorking, doInterpret, doBuildV2]);
+  }, [isWorking, doInterpret, doBuildV2, prompt, intakeData]);
 
   const handleGenerateFromIntake = useCallback(() => {
     if (!intakeData) return;
@@ -293,6 +326,18 @@ export default function HomePage() {
     setStep('idle'); setPlan(null); setDownloadUrl(null); setError(null); setBuildProg(null);
     handleStartOver();
   }, [handleStartOver]);
+
+  const handleRestoreHistory = useCallback((entry: HistoryEntry) => {
+    if (isWorking) return;
+    setStep('idle'); setError(null); setDownloadUrl(null); setPlan(null); setBuildProg(null);
+    setIntakeMode('textarea');
+    setPrompt(entry.brief);
+  }, [isWorking]);
+
+  const handleClearHistory = useCallback(() => {
+    setHistory([]);
+    try { localStorage.removeItem('invescore_history'); } catch { /* ignore */ }
+  }, []);
 
   const handleExample = useCallback((ex: string) => {
     if (isWorking) return;
@@ -648,6 +693,23 @@ export default function HomePage() {
           .chat-container { min-height: 340px !important; max-height: 420px !important; }
           .left-panel-footer { display: none !important; }
         }
+
+        /* ── History ── */
+        .history-item {
+          display: flex;
+          align-items: baseline;
+          gap: 10px;
+          padding: 7px 0;
+          border-left: 2px solid transparent;
+          padding-left: 0;
+          cursor: pointer;
+          transition: border-left-color 150ms ease, padding-left 150ms ease;
+        }
+        .history-item:hover {
+          border-left-color: #C8102E;
+          padding-left: 10px;
+        }
+        .history-item:hover .history-title { color: #1A1A1A !important; }
       `}</style>
 
       {/* ══════════════════════════════════════════════
@@ -1016,6 +1078,68 @@ export default function HomePage() {
             </button>
           ))}
         </div>
+
+        {/* ── History ── */}
+        {history.length > 0 && (
+          <div style={{ marginBottom: 48 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <span style={{
+                fontSize: 10,
+                fontWeight: 500,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                color: '#B5B5B5',
+              }}>
+                Recent
+              </span>
+              <button
+                onClick={handleClearHistory}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  fontSize: 11,
+                  color: '#CCCCCC',
+                  cursor: 'pointer',
+                  fontFamily: "'Montserrat', sans-serif",
+                  transition: 'color 150ms ease',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.color = '#C8102E')}
+                onMouseLeave={e => (e.currentTarget.style.color = '#CCCCCC')}
+              >
+                Clear
+              </button>
+            </div>
+            {history.map(entry => (
+              <div
+                key={entry.id}
+                className="history-item"
+                onClick={() => handleRestoreHistory(entry)}
+              >
+                <span className="history-title" style={{
+                  flex: 1,
+                  fontSize: 13,
+                  fontWeight: 400,
+                  color: '#B5B5B5',
+                  lineHeight: 1.5,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  transition: 'color 150ms ease',
+                }}>
+                  {entry.title}
+                </span>
+                <span style={{
+                  fontSize: 11,
+                  color: '#CCCCCC',
+                  flexShrink: 0,
+                }}>
+                  {new Date(entry.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* ── Generate button — textarea mode only ── */}
         {intakeMode === 'textarea' && (step === 'idle' || step === 'error') && (

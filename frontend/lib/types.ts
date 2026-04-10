@@ -82,3 +82,12 @@ export interface IntakeData {
 }
 
 export type IntakeMode = 'initial' | 'chat' | 'complete' | 'textarea';
+
+// ── Local history ──────────────────────────────────────────────────────────────
+export interface HistoryEntry {
+  id: string;
+  date: string;          // ISO string
+  title: string;         // presentation_title
+  brief: string;         // prompt / full_brief used for generation
+  intakeData?: IntakeData;
+}
