@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/main.py .
 COPY backend/template_engine.py .
+COPY backend/slide_builder_worker.py .
 COPY backend/brand_guide.json .
 COPY backend/templates/ templates/
 

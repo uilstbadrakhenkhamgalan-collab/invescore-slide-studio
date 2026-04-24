@@ -52,6 +52,12 @@ export interface BuildProgress {
   title: string;
 }
 
+export interface SlideWarning {
+  slideIndex?: number;
+  title?: string;
+  error: string;
+}
+
 // ── App step state ─────────────────────────────────────────────────────────────
 export type Step =
   | 'idle'

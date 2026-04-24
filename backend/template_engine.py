@@ -1,5 +1,5 @@
 """
-InvesCore Slide Studio — Template Engine v3
+InvesCore Slide Studio â€” Template Engine v3
 Hybrid approach:
   - Clone-based for opening / agenda / section_divider / closing
   - Blank-slide + brand-frame + AI-generated python-pptx for content slides
@@ -8,11 +8,14 @@ import json
 import os
 import copy
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import traceback
 import zipfile
 import re
+from pathlib import Path
 from lxml import etree
 from pptx import Presentation
 from pptx.util import Pt, Inches, Emu
@@ -20,13 +23,13 @@ from pptx.oxml.ns import qn
 from pptx.dml.color import RGBColor
 
 
-# ── XML namespaces ────────────────────────────────────────────────────────────
+# â”€â”€ XML namespaces â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 NS_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 NS_PML = "http://schemas.openxmlformats.org/presentationml/2006/main"
 NS_RID = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
-# ── Brand-frame constants (derived from content_text slide, index 15) ─────────
+# â”€â”€ Brand-frame constants (derived from content_text slide, index 15) â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # Shape IDs in the content_text slide that belong to the CONTENT AREA.
 # These are stripped when repurposing the cloned slide as a brand-frame base.
@@ -47,18 +50,18 @@ AGENDA_SECTION_TITLE_IDS = [9, 15, 21, 27, 10, 16, 22, 28]
 # Agenda slide: page-range shape IDs for slots 1-8.
 AGENDA_SECTION_PAGES_IDS = [31, 32, 33, 34, 35, 36, 37, 38]
 
-# Usable content-area bounds in inches (slide is 10" × 5.625").
+# Usable content-area bounds in inches (slide is 10" Ã— 5.625").
 # Builder Agent must keep all content within these limits.
 CONTENT_AREA_BOUNDS = {
     "top":    1.30,   # below header bar (0.59") + section-title shape (0.95")
     "bottom": 5.26,   # above page-number area
     "left":   0.57,   # left margin
     "right":  9.28,   # before right-side decorative elements
-    # Working area: ~8.71" wide × ~3.96" tall
+    # Working area: ~8.71" wide Ã— ~3.96" tall
 }
 
 
-# ── Code-execution safety ─────────────────────────────────────────────────────
+# â”€â”€ Code-execution safety â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _BLOCKED_IMPORTS = frozenset([
     "os", "sys", "subprocess", "requests", "socket", "shutil", "pathlib",
@@ -79,21 +82,24 @@ _ALLOWED_MODULES = frozenset([
 ])
 
 _EXEC_TIMEOUT_SEC = 10
+_WORKER_TIMEOUT_SEC = 20
+_WORKER_SCRIPT_PATH = Path(__file__).with_name("slide_builder_worker.py")
 
 
-# ── Engine ────────────────────────────────────────────────────────────────────
+# â”€â”€ Engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class InvescoreTemplateEngine:
 
     def __init__(self, template_path: str, brand_guide_path: str):
         self.template_path = template_path
+        self.brand_guide_path = brand_guide_path
         with open(brand_guide_path, encoding="utf-8") as f:
             self.brand = json.load(f)
         self.category_map = {s["category"]: s for s in self.brand["slides"]}
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # V1 Public API  (unchanged — used by existing /api/generate endpoint)
-    # ══════════════════════════════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    # V1 Public API  (unchanged â€” used by existing /api/generate endpoint)
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def create_presentation(self, slide_plan: list[dict]) -> str:
         """
@@ -124,13 +130,15 @@ class InvescoreTemplateEngine:
         tmp = self.create_presentation(slide_plan)
         shutil.move(tmp, output_path)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # V2 Public API  (new — hybrid clone + AI-content)
-    # ══════════════════════════════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    # V2 Public API  (new â€” hybrid clone + AI-content)
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-    def create_presentation_v2(self, slide_plan: dict, content_code_map: dict) -> str:
+    def create_presentation_v2(
+        self, slide_plan: dict, content_code_map: dict
+    ) -> tuple[str, list[dict]]:
         """
-        V2: Hybrid — clone for structural slides, AI python-pptx for content.
+        V2: Hybrid â€” clone for structural slides, AI python-pptx for content.
 
         Args:
             slide_plan:
@@ -152,26 +160,21 @@ class InvescoreTemplateEngine:
                 }
             content_code_map:
                 { content_slide_index (0-based): python_code_string }
-                Index counts only content/section_divider slides, not
+                Index counts only content slides, not
                 opening / agenda / closing.
 
         Returns:
-            Path to generated .pptx temp file.
+            Tuple of generated .pptx path and non-fatal content-render warnings.
         """
         all_sections = [s["name"] for s in slide_plan["sections"]]
-
-        # ── Build the ZIP-clone order ──────────────────────────────────────
-        # Layout: [opening] [agenda] [content slides…] [closing]
 
         source_indices = [
             self.category_map["opening"]["index"],
             self.category_map["agenda"]["index"],
         ]
 
-        # Parallel metadata for post-clone population
-        # Each entry: (pptx_slide_idx, section_name, slide_spec, stype, content_idx)
         slide_meta = []
-        content_idx = 0
+        builder_idx = 0
         pptx_idx = 2  # 0=opening, 1=agenda
 
         for section in slide_plan["sections"]:
@@ -181,88 +184,113 @@ class InvescoreTemplateEngine:
                     source_indices.append(
                         self.category_map["section_divider"]["index"]
                     )
+                    current_builder_idx = None
                 else:
-                    # All AI-content slides are based on the content_text clone
                     source_indices.append(
                         self.category_map["content_text"]["index"]
                     )
-                slide_meta.append(
-                    (pptx_idx, section["name"], slide_spec, stype, content_idx)
-                )
+                    current_builder_idx = builder_idx
+                    builder_idx += 1
+
+                slide_meta.append({
+                    "pptx_idx": pptx_idx,
+                    "section_name": section["name"],
+                    "slide_spec": slide_spec,
+                    "stype": stype,
+                    "builder_idx": current_builder_idx,
+                })
                 pptx_idx += 1
-                content_idx += 1
 
         source_indices.append(self.category_map["ending"]["index"])
 
-        # ── Clone via ZIP ──────────────────────────────────────────────────
         output_path = self._build_pptx_via_zip(source_indices)
-
-        # ── Dynamic population via python-pptx ────────────────────────────
         prs = Presentation(output_path)
 
-        # Opening (page 1)
         self._apply_content(
             prs.slides[0], "opening",
             {"presentation_title": slide_plan["presentation_title"]}
         )
-
-        # Agenda (page 2) — use extended v2 method supporting up to 8 sections
         self._apply_agenda_v2(prs.slides[1], slide_plan["sections"], start_page=3)
 
-        # Content and section-divider slides
         last_slide_label = "unknown"
-        for (pidx, section_name, slide_spec, stype, cidx) in slide_meta:
+        for meta in slide_meta:
+            if meta["stype"] != "section_divider":
+                continue
+
+            pidx = meta["pptx_idx"]
+            section_name = meta["section_name"]
+            slide_spec = meta["slide_spec"]
             slide = prs.slides[pidx]
-            page_number = pidx + 1  # 1-based
+            page_number = pidx + 1
             slide_title = slide_spec.get("title", f"Slide {page_number}")
             slide_label = f"slide={page_number} section='{section_name}' title='{slide_title}'"
             last_slide_label = slide_label
 
-            print(f"[engine] Processing {slide_label} type={stype} cidx={cidx}")
+            print(f"[engine] Preparing {slide_label} type=section_divider")
+            self._apply_content(slide, "section_divider", {
+                "section_title":       slide_spec.get("title", section_name),
+                "section_description": slide_spec.get("description", ""),
+            })
+            print(f"[engine] Section divider applied â€” {slide_label}")
 
-            if stype == "section_divider":
-                self._apply_content(slide, "section_divider", {
-                    "section_title":       slide_spec.get("title", section_name),
-                    "section_description": slide_spec.get("description", ""),
-                })
-                print(f"[engine] Section divider applied — {slide_label}")
-            else:
-                # Strip content-area shapes, leaving the brand frame intact
-                self._clear_content_area(slide)
-                # Refresh nav labels, section title, page number
-                self._update_brand_frame(slide, section_name, all_sections, page_number)
-                # Execute AI-generated python-pptx code
-                code = content_code_map.get(cidx, "")
-                if code:
-                    success = self._execute_content_code(slide, code, slide_label)
-                    if not success:
-                        print(f"[engine] Using fallback title for {slide_label}")
-                        self._add_fallback_title(slide, slide_title)
-                    else:
-                        print(f"[engine] Content built successfully for {slide_label}")
-                else:
-                    print(f"[engine] No code for cidx={cidx} — using fallback title")
-                    self._add_fallback_title(slide, slide_title)
-
-        # Closing: no text changes (zero swaps)
-        print(f"[engine] Saving .pptx to {output_path}")
+        print(f"[engine] Saving structural slides to {output_path}")
         prs.save(output_path)
 
-        # ── Validate: re-open to confirm the file is not corrupt ─────────────
+        warnings: list[dict] = []
+
+        for meta in slide_meta:
+            if meta["stype"] == "section_divider":
+                continue
+
+            pidx = meta["pptx_idx"]
+            section_name = meta["section_name"]
+            slide_spec = meta["slide_spec"]
+            current_builder_idx = meta["builder_idx"]
+            page_number = pidx + 1
+            slide_title = slide_spec.get("title", f"Slide {page_number}")
+            slide_label = f"slide={page_number} section='{section_name}' title='{slide_title}'"
+            last_slide_label = slide_label
+            code = content_code_map.get(current_builder_idx, "")
+
+            print(
+                f"[engine] Rendering {slide_label} "
+                f"builder_idx={current_builder_idx}"
+            )
+
+            warning = self._apply_content_slide_with_worker(
+                presentation_path=output_path,
+                slide_index=pidx,
+                section_name=section_name,
+                all_sections=all_sections,
+                page_number=page_number,
+                slide_title=slide_title,
+                code=code,
+                slide_label=slide_label,
+            )
+            if warning:
+                warnings.append({
+                    "builder_index": current_builder_idx,
+                    "page_number": page_number,
+                    "section_name": section_name,
+                    "title": slide_title,
+                    "message": warning,
+                })
+
         print(f"[engine] Validating saved .pptx...")
         try:
             test_prs = Presentation(output_path)
             slide_count = len(test_prs.slides)
-            print(f"[engine] Validation OK — {slide_count} slides readable")
+            print(f"[engine] Validation OK â€” {slide_count} slides readable")
         except Exception as val_exc:
-            print(f"[engine] VALIDATION FAILED — last slide was: {last_slide_label}")
+            print(f"[engine] VALIDATION FAILED â€” last slide was: {last_slide_label}")
             print(f"[engine] Validation error: {val_exc}")
             raise RuntimeError(
                 f"Generated .pptx is corrupt (failed to re-open): {val_exc}. "
                 f"Last slide processed: {last_slide_label}"
             )
 
-        return output_path
+        return output_path, warnings
+
 
     def get_content_area_bounds(self) -> dict:
         """
@@ -271,14 +299,14 @@ class InvescoreTemplateEngine:
         """
         return dict(CONTENT_AREA_BOUNDS)
 
-    # ══════════════════════════════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # Brand-frame manipulation  (v2 helpers)
-    # ══════════════════════════════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _clear_content_area(self, slide):
         """
         Remove content-area shapes from a cloned content_text slide,
-        leaving only brand-frame elements (header bar, logo, nav, page number…).
+        leaving only brand-frame elements (header bar, logo, nav, page numberâ€¦).
         """
         sp_tree = slide.shapes._spTree
         to_remove = [
@@ -306,7 +334,7 @@ class InvescoreTemplateEngine:
         for shape in slide.shapes:
             sid = shape.shape_id
 
-            # ── Nav section labels ─────────────────────────────────────────
+            # â”€â”€ Nav section labels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if sid in NAV_LABEL_SHAPE_IDS:
                 slot = NAV_LABEL_SHAPE_IDS.index(sid)
                 if not shape.has_text_frame:
@@ -327,12 +355,12 @@ class InvescoreTemplateEngine:
                     t = etree.SubElement(r, qn("a:t"))
                     t.text = new_text
 
-            # ── Section title below nav bar ───────────────────────────────
+            # â”€â”€ Section title below nav bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             elif sid == CONTENT_SECTION_TITLE_SHAPE_ID:
                 if shape.has_text_frame:
                     self._set_shape_text(shape, active_section)
 
-            # ── Page number ───────────────────────────────────────────────
+            # â”€â”€ Page number â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             elif sid == CONTENT_PAGE_NUM_SHAPE_ID:
                 if shape.has_text_frame:
                     self._set_shape_text(shape, str(page_number))
@@ -354,7 +382,7 @@ class InvescoreTemplateEngine:
             elif count == 1:
                 page_ranges.append(f"pg. {cur}")
             else:
-                page_ranges.append(f"pg. {cur}–{cur + count - 1}")
+                page_ranges.append(f"pg. {cur}â€“{cur + count - 1}")
             cur += count
 
         for shape in slide.shapes:
@@ -416,9 +444,169 @@ class InvescoreTemplateEngine:
         run.font.size = Pt(18)
         run.font.color.rgb = RGBColor(0x3B, 0x3B, 0x3B)
 
-    # ══════════════════════════════════════════════════════════════════════════
+    def _prepare_content_slide(
+        self, slide, section_name: str, all_sections: list[str], page_number: int
+    ):
+        """Reset a cloned content slide back to its clean brand-frame base."""
+        self._clear_content_area(slide)
+        self._update_brand_frame(slide, section_name, all_sections, page_number)
+
+    def _apply_ai_content_to_slide(
+        self,
+        slide,
+        *,
+        section_name: str,
+        all_sections: list[str],
+        page_number: int,
+        slide_title: str,
+        code: str,
+        slide_label: str,
+    ) -> str | None:
+        """
+        Populate a single content slide and return a warning message when the
+        builder code had to fall back to a plain title.
+        """
+        self._prepare_content_slide(slide, section_name, all_sections, page_number)
+
+        if code:
+            success = self._execute_content_code(slide, code, slide_label)
+            if success:
+                print(f"[engine] Content built successfully for {slide_label}")
+                return None
+
+            print(f"[engine] Using fallback title for {slide_label}")
+            self._add_fallback_title(slide, slide_title)
+            return (
+                "AI content rendering failed validation or execution. "
+                "A fallback title slide was used."
+            )
+
+        print(f"[engine] No builder code available â€” using fallback title for {slide_label}")
+        self._add_fallback_title(slide, slide_title)
+        return "No builder code was available for this slide. A fallback title slide was used."
+
+    def _apply_fallback_content_to_file(
+        self,
+        *,
+        presentation_path: str,
+        slide_index: int,
+        section_name: str,
+        all_sections: list[str],
+        page_number: int,
+        slide_title: str,
+        slide_label: str,
+    ):
+        """Safely write a fallback title slide when the worker fails outright."""
+        prs = Presentation(presentation_path)
+        slide = prs.slides[slide_index]
+        self._prepare_content_slide(slide, section_name, all_sections, page_number)
+        self._add_fallback_title(slide, slide_title)
+        prs.save(presentation_path)
+        print(f"[engine] Worker failed â€” fallback title saved for {slide_label}")
+
+    def _apply_content_slide_with_worker(
+        self,
+        *,
+        presentation_path: str,
+        slide_index: int,
+        section_name: str,
+        all_sections: list[str],
+        page_number: int,
+        slide_title: str,
+        code: str,
+        slide_label: str,
+    ) -> str | None:
+        """
+        Render a content slide in an isolated Python worker process and atomically
+        replace the deck only when the worker succeeds.
+        """
+        task_path = ""
+        output_copy = ""
+        task = {
+            "template_path": self.template_path,
+            "brand_guide_path": self.brand_guide_path,
+            "source_path": presentation_path,
+            "slide_index": slide_index,
+            "section_name": section_name,
+            "all_sections": all_sections,
+            "page_number": page_number,
+            "slide_title": slide_title,
+            "slide_label": slide_label,
+            "code": code,
+        }
+
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".pptx", delete=False
+            ) as output_file:
+                output_copy = output_file.name
+            task["output_path"] = output_copy
+
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False, encoding="utf-8"
+            ) as task_file:
+                json.dump(task, task_file, ensure_ascii=False)
+                task_path = task_file.name
+
+            result = subprocess.run(
+                [sys.executable, str(_WORKER_SCRIPT_PATH), task_path],
+                capture_output=True,
+                text=True,
+                timeout=_WORKER_TIMEOUT_SEC,
+                check=False,
+            )
+
+            if result.returncode != 0:
+                stderr = result.stderr.strip() or result.stdout.strip()
+                raise RuntimeError(stderr or "worker exited with a non-zero status")
+
+            stdout = result.stdout.strip()
+            payload = json.loads(stdout.splitlines()[-1] if stdout else "{}")
+
+            if not output_copy or not os.path.exists(output_copy):
+                raise RuntimeError("worker finished without producing an output deck")
+
+            os.replace(output_copy, presentation_path)
+            output_copy = ""
+            return payload.get("warning")
+
+        except subprocess.TimeoutExpired:
+            self._apply_fallback_content_to_file(
+                presentation_path=presentation_path,
+                slide_index=slide_index,
+                section_name=section_name,
+                all_sections=all_sections,
+                page_number=page_number,
+                slide_title=slide_title,
+                slide_label=slide_label,
+            )
+            return "Isolated content worker timed out. A fallback title slide was used."
+
+        except Exception as exc:
+            print(f"[engine] Worker failed for {slide_label}: {exc}")
+            self._apply_fallback_content_to_file(
+                presentation_path=presentation_path,
+                slide_index=slide_index,
+                section_name=section_name,
+                all_sections=all_sections,
+                page_number=page_number,
+                slide_title=slide_title,
+                slide_label=slide_label,
+            )
+            return (
+                "Isolated content worker failed before rendering the slide. "
+                "A fallback title slide was used."
+            )
+
+        finally:
+            if task_path and os.path.exists(task_path):
+                os.unlink(task_path)
+            if output_copy and os.path.exists(output_copy):
+                os.unlink(output_copy)
+
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # Code execution sandbox
-    # ══════════════════════════════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _validate_code(self, code: str) -> tuple[bool, str]:
         """
@@ -445,25 +633,25 @@ class InvescoreTemplateEngine:
             def build_content(slide, Inches, Pt, Emu, RGBColor): ...
 
         Safety layers:
-        1. Static validation — blocked imports / tokens
-        2. Restricted __import__ — only pptx, math, datetime, etc.
-        3. Restricted builtins — no open(), exec(), eval(), globals()…
-        4. Threading timeout — 10 s hard limit per slide
-        5. Rollback — any shapes added before a crash are removed
-        6. XML sanity check — slide XML must be serialisable after exec
+        1. Static validation â€” blocked imports / tokens
+        2. Restricted __import__ â€” only pptx, math, datetime, etc.
+        3. Restricted builtins â€” no open(), exec(), eval(), globals()â€¦
+        4. Threading timeout â€” 10 s hard limit per slide
+        5. Rollback â€” any shapes added before a crash are removed
+        6. XML sanity check â€” slide XML must be serialisable after exec
 
         Returns True on success, False on any rejection / error / timeout.
         """
         prefix = f"[builder{' ' + slide_label if slide_label else ''}]"
 
-        # ── Static validation ────────────────────────────────────────────────
+        # â”€â”€ Static validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         is_safe, reason = self._validate_code(code_string)
         if not is_safe:
-            print(f"{prefix} VALIDATION FAILED — {reason}")
+            print(f"{prefix} VALIDATION FAILED â€” {reason}")
             print(f"{prefix} Rejected code (first 500 chars): {code_string[:500]}")
             return False
 
-        # ── Snapshot existing shape elements for rollback ────────────────────
+        # â”€â”€ Snapshot existing shape elements for rollback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sp_tree = slide.shapes._spTree
         before_elem_ids = set(id(elem) for elem in list(sp_tree))
 
@@ -489,10 +677,9 @@ class InvescoreTemplateEngine:
                     "filter": filter, "round": round, "max": max, "min": min,
                     "abs": abs, "sum": sum, "sorted": sorted,
                     "reversed": reversed, "any": any, "all": all,
-                    # Introspection (needed by pptx patterns)
-                    "isinstance": isinstance, "issubclass": issubclass,
-                    "hasattr": hasattr, "getattr": getattr, "setattr": setattr,
-                    "type": type, "repr": repr, "print": print,
+                    # Light inspection helpers for defensive code paths
+                    "isinstance": isinstance,
+                    "getattr": getattr,
                     # Constants
                     "True": True, "False": False, "None": None,
                     # Controlled import gateway
@@ -514,7 +701,7 @@ class InvescoreTemplateEngine:
         thread.join(timeout=_EXEC_TIMEOUT_SEC)
 
         if thread.is_alive():
-            print(f"{prefix} TIMED OUT after {_EXEC_TIMEOUT_SEC}s — rolling back and using fallback title")
+            print(f"{prefix} TIMED OUT after {_EXEC_TIMEOUT_SEC}s â€” rolling back and using fallback title")
             # Rollback any partially-added shapes
             for elem in list(sp_tree):
                 if id(elem) not in before_elem_ids:
@@ -539,10 +726,10 @@ class InvescoreTemplateEngine:
             print(f"{prefix}   Rolled back {removed} partially-added shape(s)")
             return False
 
-        # ── XML sanity check ─────────────────────────────────────────────────
+        # â”€â”€ XML sanity check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         try:
             etree.tostring(slide._element)
-            print(f"{prefix} Execution OK — XML sanity check passed")
+            print(f"{prefix} Execution OK â€” XML sanity check passed")
         except Exception as xml_exc:
             print(f"{prefix} XML SANITY CHECK FAILED after execution: {xml_exc}")
             # Rollback
@@ -553,9 +740,9 @@ class InvescoreTemplateEngine:
 
         return result[0]
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # ZIP-level slide builder  (unchanged from v2 — handles clone logic)
-    # ══════════════════════════════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    # ZIP-level slide builder  (unchanged from v2 â€” handles clone logic)
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _build_pptx_via_zip(self, source_indices: list[int]) -> str:
         """
@@ -571,7 +758,7 @@ class InvescoreTemplateEngine:
             prs_rels_bytes = src_zip.read("ppt/_rels/presentation.xml.rels")
             prs_rels       = etree.fromstring(prs_rels_bytes)
 
-            # Map rId → Target (e.g. 'slides/slide1.xml')
+            # Map rId â†’ Target (e.g. 'slides/slide1.xml')
             rId_to_target = {}
             for rel in prs_rels.findall(f"{{{NS_REL}}}Relationship"):
                 rId_to_target[rel.get("Id")] = rel.get("Target")
@@ -639,7 +826,7 @@ class InvescoreTemplateEngine:
                     new_slide_targets.append(new_target)
                     new_slide_rids.append(f"rId_slide{new_num}")
 
-                # Write updated [Content_Types].xml — remove stale slide Override
+                # Write updated [Content_Types].xml â€” remove stale slide Override
                 # entries and add exact entries for the slides we actually generated.
                 SLIDE_CT = (
                     "application/vnd.openxmlformats-officedocument"
@@ -724,9 +911,9 @@ class InvescoreTemplateEngine:
             elem.set("Target", target)
         return rels
 
-    # ══════════════════════════════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # V1 content-replacement helpers  (unchanged)
-    # ══════════════════════════════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _apply_content(self, slide, category: str, content: dict):
         """Replace dynamic text fields in the slide (V1 mechanism)."""
@@ -811,9 +998,9 @@ class InvescoreTemplateEngine:
                 t      = etree.SubElement(new_r, qn("a:t"))
                 t.text = text
 
-    # ══════════════════════════════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # Utility
-    # ══════════════════════════════════════════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def get_available_categories(self) -> list[str]:
         return [s["category"] for s in self.brand["slides"]]
@@ -822,7 +1009,7 @@ class InvescoreTemplateEngine:
         return self.category_map.get(category, {})
 
 
-# ── Smoke test ────────────────────────────────────────────────────────────────
+# â”€â”€ Smoke test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 if __name__ == "__main__":
     import sys
@@ -837,7 +1024,7 @@ if __name__ == "__main__":
     print("Available categories:", engine.get_available_categories())
     print("Content area bounds :", engine.get_content_area_bounds())
 
-    # ── Test V2 with hardcoded content code ───────────────────────────────────
+    # â”€â”€ Test V2 with hardcoded content code â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     HARDCODED_CODE = '''
 def build_content(slide, Inches, Pt, Emu, RGBColor):
     """Test: three KPI metric cards."""
@@ -939,7 +1126,7 @@ def build_content(slide, Inches, Pt, Emu, RGBColor):
                 "slides": [
                     {
                         "slide_type": "content",
-                        "title": "Second Slide (fallback test — no code)",
+                        "title": "Second Slide (fallback test â€” no code)",
                         "description": "Should show brand frame + fallback title only.",
                         "content_spec": {},
                     }
@@ -956,8 +1143,8 @@ def build_content(slide, Inches, Pt, Emu, RGBColor):
     shutil.move(out, dest)
     print(f"\nPhase 1 test output: {dest}")
     print("Open the file and verify:")
-    print("  Slide 1 — Opening: 'PHASE 1 BRAND-FRAME TEST'")
-    print("  Slide 2 — Agenda:  two sections with page ranges")
-    print("  Slide 3 — Content: brand frame + 3 KPI metric cards")
-    print("  Slide 4 — Content: brand frame + fallback title (no AI code)")
-    print("  Slide 5 — Closing: unchanged clone")
+    print("  Slide 1 â€” Opening: 'PHASE 1 BRAND-FRAME TEST'")
+    print("  Slide 2 â€” Agenda:  two sections with page ranges")
+    print("  Slide 3 â€” Content: brand frame + 3 KPI metric cards")
+    print("  Slide 4 â€” Content: brand frame + fallback title (no AI code)")
+    print("  Slide 5 â€” Closing: unchanged clone")

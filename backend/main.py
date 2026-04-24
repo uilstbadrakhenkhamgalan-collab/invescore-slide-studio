@@ -2,17 +2,21 @@
 InvesCore Slide Studio — FastAPI Backend v2
 """
 import asyncio
-import io
+import hashlib
 import json
+import os
 import re
-import tempfile
+import secrets
+import shutil
+import time
+import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import anthropic
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from template_engine import InvescoreTemplateEngine
@@ -21,6 +25,8 @@ from template_engine import InvescoreTemplateEngine
 BASE_DIR        = Path(__file__).parent
 TEMPLATE_PATH   = BASE_DIR / "templates" / "InvesCore_Master_Template.pptx"
 BRAND_GUIDE_PATH = BASE_DIR / "brand_guide.json"
+TMP_DIR         = BASE_DIR / "tmp"
+ARTIFACT_TTL_SECONDS = int(os.environ.get("ARTIFACT_TTL_SECONDS", "21600"))
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="InvesCore Slide Studio API", version="2.0.0")
@@ -28,7 +34,7 @@ app = FastAPI(title="InvesCore Slide Studio API", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -364,6 +370,100 @@ def _sse(event: str, data: Any = None) -> str:
     return line
 
 
+def _run_intake_request(api_key: str, messages: list[dict]) -> str:
+    client = anthropic.Anthropic(api_key=api_key)
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2000,
+        temperature=0.4,
+        system=INTAKE_SYSTEM_PROMPT,
+        messages=messages,
+    )
+    return message.content[0].text
+
+
+def _run_interpreter_request(api_key: str, prompt: str):
+    client = anthropic.Anthropic(api_key=api_key)
+    with client.messages.stream(
+        model="claude-sonnet-4-6",
+        max_tokens=32000,
+        temperature=0.3,
+        system=INTERPRETER_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        raw = stream.get_final_text()
+        usage = stream.get_final_message().usage
+    return raw, usage
+
+
+def _sanitize_download_filename(raw_title: str) -> str:
+    cleaned = re.sub(r'[\x00-\x1f\x7f]+', "", raw_title).strip()
+    cleaned = cleaned.replace("/", "-").replace("\\", "-").replace(":", " -")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    if not cleaned:
+        cleaned = "Presentation"
+    return f"InvesCore_{cleaned[:80]}.pptx"
+
+
+def _artifact_file_path(artifact_id: str) -> Path:
+    return TMP_DIR / f"{artifact_id}.pptx"
+
+
+def _artifact_meta_path(artifact_id: str) -> Path:
+    return TMP_DIR / f"{artifact_id}.json"
+
+
+def _hash_download_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _cleanup_expired_artifacts():
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    current_ts = time.time()
+
+    for meta_path in TMP_DIR.glob("*.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            expires_at = float(meta.get("expires_at", 0))
+        except Exception:
+            expires_at = 0
+
+        artifact_id = meta_path.stem
+        file_path = _artifact_file_path(artifact_id)
+        if expires_at and expires_at > current_ts and file_path.exists():
+            continue
+
+        if file_path.exists():
+            file_path.unlink()
+        meta_path.unlink(missing_ok=True)
+
+
+def _store_download_artifact(source_path: str, presentation_title: str) -> dict[str, str]:
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    _cleanup_expired_artifacts()
+
+    artifact_id = uuid.uuid4().hex
+    download_token = secrets.token_urlsafe(32)
+    filename = _sanitize_download_filename(presentation_title)
+    artifact_path = _artifact_file_path(artifact_id)
+    meta_path = _artifact_meta_path(artifact_id)
+
+    shutil.move(source_path, artifact_path)
+    metadata = {
+        "filename": filename,
+        "token_sha256": _hash_download_token(download_token),
+        "created_at": time.time(),
+        "expires_at": time.time() + ARTIFACT_TTL_SECONDS,
+    }
+    meta_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    return {
+        "artifact_id": artifact_id,
+        "download_token": download_token,
+        "filename": filename,
+    }
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ENDPOINTS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -383,15 +483,12 @@ async def intake_conversation(req: IntakeRequest):
     if not req.messages:
         raise HTTPException(400, "messages cannot be empty")
     try:
-        client  = anthropic.Anthropic(api_key=req.api_key)
-        message = client.messages.create(
-            model      = "claude-sonnet-4-6",
-            max_tokens = 2000,
-            temperature= 0.4,
-            system     = INTAKE_SYSTEM_PROMPT,
-            messages   = req.messages,
+        content = await asyncio.to_thread(
+            _run_intake_request,
+            req.api_key,
+            req.messages,
         )
-        return {"content": message.content[0].text}
+        return {"content": content}
     except anthropic.AuthenticationError:
         raise HTTPException(401, "Invalid API key")
     except anthropic.RateLimitError:
@@ -410,8 +507,6 @@ async def interpret(req: InterpretRequest):
     if not req.api_key.startswith("sk-ant-"):
         raise HTTPException(400, "Invalid Anthropic API key format")
     try:
-        client = anthropic.Anthropic(api_key=req.api_key)
-
         def _is_overloaded(exc: Exception) -> bool:
             s = str(exc).lower()
             return "overloaded" in s or (hasattr(exc, "status_code") and exc.status_code == 529)
@@ -421,15 +516,11 @@ async def interpret(req: InterpretRequest):
         last_exc: Exception | None = None
         for attempt in range(max_retries):
             try:
-                with client.messages.stream(
-                    model      = "claude-sonnet-4-6",
-                    max_tokens = 32000,
-                    temperature= 0.3,
-                    system     = INTERPRETER_SYSTEM_PROMPT,
-                    messages   = [{"role": "user", "content": req.prompt}],
-                ) as stream:
-                    raw   = stream.get_final_text()
-                    usage = stream.get_final_message().usage
+                raw, usage = await asyncio.to_thread(
+                    _run_interpreter_request,
+                    req.api_key,
+                    req.prompt,
+                )
                 last_exc = None
                 break  # success
             except Exception as e:
@@ -529,7 +620,7 @@ async def generate_v2(req: GenerateV2Request):
       building_slide        — {current, total, title}
       slide_error           — {slide_index, title, error}  (non-fatal)
       finalizing            — assembling .pptx (no data)
-      done                  — {filename}   (triggers frontend to call /api/download)
+      done                  — {artifact_id, download_token, filename, warning_count}
       error                 — {message}    (fatal, stream ends)
     """
     if not req.api_key.startswith("sk-ant-"):
@@ -556,6 +647,7 @@ async def generate_v2(req: GenerateV2Request):
 
             total = len(content_slides)
             content_code_map: dict[int, str] = {}
+            builder_failures: set[int] = set()
 
             # ── Call Builder Agent for each content slide ─────────────────
             for current_num, (section_name, slide_spec, cidx) in enumerate(
@@ -569,7 +661,8 @@ async def generate_v2(req: GenerateV2Request):
                 })
 
                 try:
-                    code = _call_builder_agent(
+                    code = await asyncio.to_thread(
+                        _call_builder_agent,
                         api_key            = api_key,
                         slide_spec         = slide_spec,
                         presentation_title = slide_plan.get("presentation_title", ""),
@@ -581,6 +674,7 @@ async def generate_v2(req: GenerateV2Request):
                 except Exception as build_err:
                     print(f"[main] Builder Agent FAILED for slide {current_num}/{total} "
                           f"section='{section_name}' title='{title}': {build_err}")
+                    builder_failures.add(cidx)
                     yield _sse("slide_error", {
                         "slide_index": cidx,
                         "title":       title,
@@ -592,21 +686,37 @@ async def generate_v2(req: GenerateV2Request):
             # ── Assemble .pptx ────────────────────────────────────────────
             yield _sse("finalizing")
 
-            engine      = InvescoreTemplateEngine(str(TEMPLATE_PATH), str(BRAND_GUIDE_PATH))
-            output_path = engine.create_presentation_v2(slide_plan, content_code_map)
+            engine = InvescoreTemplateEngine(str(TEMPLATE_PATH), str(BRAND_GUIDE_PATH))
+            output_path, engine_warnings = await asyncio.to_thread(
+                engine.create_presentation_v2,
+                slide_plan,
+                content_code_map,
+            )
 
-            # Derive filename
-            raw_title = slide_plan.get("presentation_title", "Presentation")
-            safe      = raw_title[:40].replace("/", "-").replace("\\", "-").replace(" ", "_")
-            filename  = f"InvesCore_{safe}.pptx"
+            warning_ids = set(builder_failures)
+            for warning in engine_warnings:
+                warning_idx = warning.get("builder_index")
+                if warning_idx in warning_ids:
+                    continue
+                warning_ids.add(warning_idx)
+                yield _sse("slide_error", {
+                    "slide_index": warning_idx,
+                    "title": warning.get("title"),
+                    "error": warning.get("message"),
+                })
 
-            # Move to a stable temp path keyed by filename so /api/download can serve it
-            stable_path = str(BASE_DIR / "tmp" / filename)
-            import shutil, os
-            os.makedirs(str(BASE_DIR / "tmp"), exist_ok=True)
-            shutil.move(output_path, stable_path)
+            artifact = await asyncio.to_thread(
+                _store_download_artifact,
+                output_path,
+                slide_plan.get("presentation_title", "Presentation"),
+            )
 
-            yield _sse("done", {"filename": filename})
+            yield _sse("done", {
+                "artifact_id": artifact["artifact_id"],
+                "download_token": artifact["download_token"],
+                "filename": artifact["filename"],
+                "warning_count": len(warning_ids),
+            })
 
         except anthropic.AuthenticationError:
             yield _sse("error", {"message": "Invalid API key"})
@@ -628,20 +738,40 @@ async def generate_v2(req: GenerateV2Request):
 
 # ── Download endpoint (serves the assembled .pptx after SSE done) ─────────────
 
-@app.get("/api/download/{filename}")
-async def download(filename: str):
-    """Serve the generated .pptx file."""
-    # Sanitise filename — no path traversal
-    safe_name = Path(filename).name
-    if not safe_name.endswith(".pptx"):
-        raise HTTPException(400, "Invalid filename")
-    file_path = BASE_DIR / "tmp" / safe_name
-    if not file_path.exists():
+@app.get("/api/download/{artifact_id}")
+async def download(artifact_id: str, x_download_token: str | None = Header(default=None)):
+    """Serve a generated .pptx file via an opaque artifact id and download token."""
+    _cleanup_expired_artifacts()
+
+    if not re.fullmatch(r"[0-9a-f]{32}", artifact_id):
+        raise HTTPException(400, "Invalid artifact id")
+    if not x_download_token:
+        raise HTTPException(401, "Missing download token")
+
+    meta_path = _artifact_meta_path(artifact_id)
+    file_path = _artifact_file_path(artifact_id)
+    if not meta_path.exists() or not file_path.exists():
         raise HTTPException(404, "File not found — may have expired")
+
+    try:
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to read artifact metadata: {exc}")
+
+    if float(metadata.get("expires_at", 0)) <= time.time():
+        file_path.unlink(missing_ok=True)
+        meta_path.unlink(missing_ok=True)
+        raise HTTPException(404, "File not found — may have expired")
+
+    expected_hash = metadata.get("token_sha256", "")
+    presented_hash = _hash_download_token(x_download_token)
+    if not secrets.compare_digest(expected_hash, presented_hash):
+        raise HTTPException(403, "Invalid download token")
+
     return FileResponse(
-        path       = str(file_path),
-        media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename   = safe_name,
+        path=str(file_path),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=metadata.get("filename", f"{artifact_id}.pptx"),
     )
 
 

@@ -5,7 +5,7 @@ import Image from 'next/image';
 import type {
   V2SlidePlan, Step, TokenUsage, BuildProgress,
   ChatMessage, IntakeData, IntakeMode,
-  InterpretResponse, HistoryEntry,
+  InterpretResponse, HistoryEntry, SlideWarning,
 } from '@/lib/types';
 import { BACKEND_URL } from '@/lib/constants';
 
@@ -52,9 +52,12 @@ export default function HomePage() {
   const [step, setStep] = useState<Step>('idle');
   const [plan, setPlan] = useState<V2SlidePlan | null>(null);
   const [buildProg, setBuildProg] = useState<BuildProgress | null>(null);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [downloadArtifactId, setDownloadArtifactId] = useState<string | null>(null);
+  const [downloadToken, setDownloadToken] = useState('');
   const [downloadFilename, setDownloadFilename] = useState('presentation.pptx');
   const [error, setError] = useState<string | null>(null);
+  const [slideWarnings, setSlideWarnings] = useState<SlideWarning[]>([]);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -83,17 +86,12 @@ export default function HomePage() {
   // ── Load persisted data on mount ─────────────────────────────────────────
   useEffect(() => {
     try {
-      const savedKey = localStorage.getItem('invescore_api_key');
-      if (savedKey) setApiKey(savedKey);
       const savedHistory = localStorage.getItem('invescore_history');
       if (savedHistory) setHistory(JSON.parse(savedHistory));
     } catch { /* ignore */ }
   }, []);
 
   // ── Persist API key on change ────────────────────────────────────────────
-  useEffect(() => {
-    try { localStorage.setItem('invescore_api_key', apiKey); } catch { /* ignore */ }
-  }, [apiKey]);
 
   // ── Intake API call ─────────────────────────────────────────────────────────
   const callIntakeAPI = useCallback(async (messages: ChatMessage[]): Promise<string> => {
@@ -231,6 +229,10 @@ export default function HomePage() {
   const doBuildV2 = useCallback(async (slidePlan: V2SlidePlan) => {
     setStep('building');
     setBuildProg(null);
+    setSlideWarnings([]);
+    setDownloadArtifactId(null);
+    setDownloadToken('');
+    setDownloadFilename('presentation.pptx');
 
     const res = await fetch(`${BACKEND_URL}/api/generate_v2`, {
       method: 'POST',
@@ -247,6 +249,7 @@ export default function HomePage() {
     if (!reader) throw new Error('No response stream');
     const decoder = new TextDecoder();
     let buffer = '';
+    let completed = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -270,22 +273,84 @@ export default function HomePage() {
             total:   data.total   as number,
             title:   data.title   as string,
           });
+        } else if (eventType === 'slide_error') {
+          setSlideWarnings(prev => [
+            ...prev,
+            {
+              slideIndex: typeof data.slide_index === 'number' ? data.slide_index : undefined,
+              title: typeof data.title === 'string' ? data.title : undefined,
+              error: (data.error as string) || 'Slide rendering failed.',
+            },
+          ]);
         } else if (eventType === 'done') {
-          const filename = data.filename as string;
-          setDownloadFilename(filename);
-          setDownloadUrl(`${BACKEND_URL}/api/download/${encodeURIComponent(filename)}`);
+          setDownloadArtifactId((data.artifact_id as string) || null);
+          setDownloadToken((data.download_token as string) || '');
+          setDownloadFilename((data.filename as string) || 'presentation.pptx');
           setStep('done');
           setBuildProg(null);
+          completed = true;
         } else if (eventType === 'error') {
           throw new Error((data.message as string) || 'Generation failed');
         }
       }
     }
+
+    if (!completed) {
+      throw new Error('Generation ended before the presentation was ready.');
+    }
   }, [apiKey]);
+
+  const handleDownload = useCallback(async () => {
+    if (!downloadArtifactId || !downloadToken || isDownloading) return;
+
+    setIsDownloading(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/download/${encodeURIComponent(downloadArtifactId)}`, {
+        headers: { 'X-Download-Token': downloadToken },
+      });
+
+      if (!res.ok) {
+        let detail = '';
+        try {
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const body = await res.json() as { detail?: string };
+            detail = body.detail || '';
+          } else {
+            detail = await res.text();
+          }
+        } catch {
+          detail = '';
+        }
+        throw new Error(detail || `Download failed (${res.status})`);
+      }
+
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = downloadFilename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 0);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Download failed');
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [downloadArtifactId, downloadFilename, downloadToken, isDownloading]);
 
   const handleGenerate = useCallback(async (promptOverride?: string) => {
     if (isWorking) return;
-    setError(null); setDownloadUrl(null); setPlan(null); setBuildProg(null);
+    setError(null);
+    setPlan(null);
+    setBuildProg(null);
+    setSlideWarnings([]);
+    setDownloadArtifactId(null);
+    setDownloadToken('');
+    setDownloadFilename('presentation.pptx');
+    setIsDownloading(false);
     const brief = promptOverride ?? prompt.trim();
     try {
       const newPlan = await doInterpret(promptOverride);
@@ -318,18 +383,35 @@ export default function HomePage() {
   const handleBuildFromPlan = useCallback(async () => {
     if (!plan) return;
     setError(null);
+    setSlideWarnings([]);
     try { await doBuildV2(plan); }
     catch (e: unknown) { setError(e instanceof Error ? e.message : 'Unknown error'); setStep('error'); }
   }, [plan, doBuildV2]);
 
   const handleReset = useCallback(() => {
-    setStep('idle'); setPlan(null); setDownloadUrl(null); setError(null); setBuildProg(null);
+    setStep('idle');
+    setPlan(null);
+    setError(null);
+    setBuildProg(null);
+    setSlideWarnings([]);
+    setDownloadArtifactId(null);
+    setDownloadToken('');
+    setDownloadFilename('presentation.pptx');
+    setIsDownloading(false);
     handleStartOver();
   }, [handleStartOver]);
 
   const handleRestoreHistory = useCallback((entry: HistoryEntry) => {
     if (isWorking) return;
-    setStep('idle'); setError(null); setDownloadUrl(null); setPlan(null); setBuildProg(null);
+    setStep('idle');
+    setError(null);
+    setPlan(null);
+    setBuildProg(null);
+    setSlideWarnings([]);
+    setDownloadArtifactId(null);
+    setDownloadToken('');
+    setDownloadFilename('presentation.pptx');
+    setIsDownloading(false);
     setIntakeMode('textarea');
     setPrompt(entry.brief);
   }, [isWorking]);
@@ -859,7 +941,7 @@ export default function HomePage() {
             fontWeight: 400,
             color: '#B5B5B5',
           }}>
-            Stored locally. Never sent to our servers.
+            Kept only in this browser session and sent with your generation requests.
           </p>
         </div>
 
@@ -1319,29 +1401,71 @@ export default function HomePage() {
         )}
 
         {/* ── Download ── */}
-        {step === 'done' && downloadUrl && (
+        {step === 'done' && downloadArtifactId && downloadToken && (
           <div className="download-section" style={{ marginTop: 48 }}>
-            <a href={downloadUrl} download={downloadFilename} target="_blank" rel="noreferrer" style={{ textDecoration: 'none', display: 'block' }}>
-              <button
-                className="btn-download"
-                style={{
-                  width: '100%',
-                  padding: '16px 0',
-                  background: '#FFFFFF',
-                  border: '1.5px solid #1A1A1A',
-                  borderRadius: 0,
-                  fontSize: 12,
-                  fontWeight: 500,
-                  letterSpacing: '0.10em',
+            <button
+              className="btn-download"
+              onClick={handleDownload}
+              disabled={isDownloading}
+              style={{
+                width: '100%',
+                padding: '16px 0',
+                background: '#FFFFFF',
+                border: '1.5px solid #1A1A1A',
+                borderRadius: 0,
+                fontSize: 12,
+                fontWeight: 500,
+                letterSpacing: '0.10em',
+                textTransform: 'uppercase',
+                color: '#1A1A1A',
+                cursor: isDownloading ? 'wait' : 'pointer',
+                fontFamily: "'Montserrat', sans-serif",
+                opacity: isDownloading ? 0.6 : 1,
+              }}
+            >
+              {isDownloading ? 'Preparing Download...' : 'Download'}
+            </button>
+            {slideWarnings.length > 0 && (
+              <div style={{
+                marginTop: 16,
+                border: '1px solid #E8D9B5',
+                background: '#FCF8EF',
+                padding: '16px 18px',
+              }}>
+                <p style={{
+                  margin: 0,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  letterSpacing: '0.08em',
                   textTransform: 'uppercase',
-                  color: '#1A1A1A',
-                  cursor: 'pointer',
-                  fontFamily: "'Montserrat', sans-serif",
-                }}
-              >
-                Download
-              </button>
-            </a>
+                  color: '#8A6A1F',
+                }}>
+                  {slideWarnings.length} slide{slideWarnings.length === 1 ? '' : 's'} used fallback content
+                </p>
+                <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+                  {slideWarnings.map((warning, idx) => (
+                    <div key={`${warning.title ?? 'warning'}-${idx}`}>
+                      <p style={{
+                        margin: 0,
+                        fontSize: 13,
+                        fontWeight: 500,
+                        color: '#3B3B3B',
+                      }}>
+                        {warning.title || `Content slide ${typeof warning.slideIndex === 'number' ? warning.slideIndex + 1 : idx + 1}`}
+                      </p>
+                      <p style={{
+                        margin: '4px 0 0',
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                        color: '#6A6A6A',
+                      }}>
+                        {warning.error}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {tokenUsage && (
               <p style={{
                 marginTop: 10,
