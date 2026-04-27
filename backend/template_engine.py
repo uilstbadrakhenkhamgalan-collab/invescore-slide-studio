@@ -229,7 +229,7 @@ class InvescoreTemplateEngine:
             print(f"[engine] Preparing {slide_label} type=section_divider")
             self._apply_content(slide, "section_divider", {
                 "section_title":       slide_spec.get("title", section_name),
-                "section_description": slide_spec.get("description", ""),
+                "section_description": "",  # description is internal AI guidance only
             })
             print(f"[engine] Section divider applied â€” {slide_label}")
 
@@ -364,6 +364,35 @@ class InvescoreTemplateEngine:
             elif sid == CONTENT_PAGE_NUM_SHAPE_ID:
                 if shape.has_text_frame:
                     self._set_shape_text(shape, str(page_number))
+
+        # Add rotated "Confidential document" label at the right edge
+        self._ensure_confidential_label(slide)
+
+    def _ensure_confidential_label(self, slide):
+        """Add a rotated 'Confidential document' text box at the right edge if absent."""
+        CONFIDENTIAL_TEXT = "Confidential document"
+        # Check if label already exists (avoid duplicates on repeated calls)
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip() == CONFIDENTIAL_TEXT:
+                return
+        from pptx.util import Pt, Inches, Emu
+        from pptx.dml.color import RGBColor
+        # Position: right edge of slide, spanning full slide height
+        # Slide dimensions: 10" x 5.63" (standard widescreen)
+        txBox = slide.shapes.add_textbox(
+            Inches(9.55), Inches(0.1), Inches(0.35), Inches(5.43)
+        )
+        tf = txBox.text_frame
+        tf.word_wrap = False
+        p = tf.paragraphs[0]
+        p.alignment = 2  # PP_ALIGN.CENTER
+        run = p.add_run()
+        run.text = CONFIDENTIAL_TEXT
+        run.font.size = Pt(7)
+        run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+        run.font.bold = False
+        # Rotate 90 degrees counter-clockwise (text reads bottom-to-top)
+        txBox.rotation = 90
 
     def _apply_agenda_v2(self, slide, sections: list, start_page: int):
         """
@@ -654,7 +683,13 @@ class InvescoreTemplateEngine:
 
         # â”€â”€ Snapshot existing shape elements for rollback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sp_tree = slide.shapes._spTree
-        before_elem_ids = set(id(elem) for elem in list(sp_tree))
+        snapshot = copy.deepcopy(sp_tree)
+
+        def _restore_snapshot():
+            for child in list(sp_tree):
+                sp_tree.remove(child)
+            for child in list(snapshot):
+                sp_tree.append(copy.deepcopy(child))
 
         result     = [False]
         exc_holder = [None]
@@ -703,10 +738,7 @@ class InvescoreTemplateEngine:
 
         if thread.is_alive():
             print(f"{prefix} TIMED OUT after {_EXEC_TIMEOUT_SEC}s â€” rolling back and using fallback title")
-            # Rollback any partially-added shapes
-            for elem in list(sp_tree):
-                if id(elem) not in before_elem_ids:
-                    sp_tree.remove(elem)
+            _restore_snapshot()
             return False
 
         if exc_holder[0]:
@@ -718,13 +750,8 @@ class InvescoreTemplateEngine:
             for line in tb_lines:
                 for subline in line.splitlines():
                     print(f"{prefix}     {subline}")
-            # Rollback any partially-added shapes
-            removed = 0
-            for elem in list(sp_tree):
-                if id(elem) not in before_elem_ids:
-                    sp_tree.remove(elem)
-                    removed += 1
-            print(f"{prefix}   Rolled back {removed} partially-added shape(s)")
+            _restore_snapshot()
+            print(f"{prefix}   Rolled back to pre-execution snapshot")
             return False
 
         # â”€â”€ XML sanity check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -733,10 +760,7 @@ class InvescoreTemplateEngine:
             print(f"{prefix} Execution OK â€” XML sanity check passed")
         except Exception as xml_exc:
             print(f"{prefix} XML SANITY CHECK FAILED after execution: {xml_exc}")
-            # Rollback
-            for elem in list(sp_tree):
-                if id(elem) not in before_elem_ids:
-                    sp_tree.remove(elem)
+            _restore_snapshot()
             return False
 
         return result[0]
@@ -1158,7 +1182,7 @@ def build_content(slide, Inches, Pt, Emu, RGBColor):
     # Slide 0 gets the metric-card code; slide 1 intentionally left blank.
     content_code_map = {0: HARDCODED_CODE}
 
-    out = engine.create_presentation_v2(slide_plan, content_code_map)
+    out, _warnings = engine.create_presentation_v2(slide_plan, content_code_map)
     dest = os.path.join(PROJECT, "backend", "phase1_test_output.pptx")
     shutil.move(out, dest)
     print(f"\nPhase 1 test output: {dest}")
