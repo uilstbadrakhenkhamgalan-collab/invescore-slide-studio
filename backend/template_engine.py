@@ -792,6 +792,11 @@ class InvescoreTemplateEngine:
 
             slide_pattern      = re.compile(r"^ppt/slides/slide\d+\.xml$")
             slide_rels_pattern = re.compile(r"^ppt/slides/_rels/slide\d+\.xml\.rels$")
+            notes_slide_pattern      = re.compile(r"^ppt/notesSlides/notesSlide\d+\.xml$")
+            notes_slide_rels_pattern = re.compile(r"^ppt/notesSlides/_rels/notesSlide\d+\.xml\.rels$")
+            NOTES_REL_TYPE = (
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide"
+            )
 
             # Parse [Content_Types].xml so we can rebuild it accurately
             NS_CT = "http://schemas.openxmlformats.org/package/2006/content-types"
@@ -807,6 +812,8 @@ class InvescoreTemplateEngine:
                     ):
                         continue
                     if slide_pattern.match(name) or slide_rels_pattern.match(name):
+                        continue
+                    if notes_slide_pattern.match(name) or notes_slide_rels_pattern.match(name):
                         continue
                     dst_zip.writestr(name, src_zip.read(name))
 
@@ -826,7 +833,13 @@ class InvescoreTemplateEngine:
                         "ppt/slides/", "ppt/slides/_rels/"
                     ) + ".rels"
                     if src_rels_path in src_zip.namelist():
-                        dst_zip.writestr(new_rels_name, src_zip.read(src_rels_path))
+                        rels_xml = etree.fromstring(src_zip.read(src_rels_path))
+                        for rel in list(rels_xml.findall(f"{{{NS_REL}}}Relationship")):
+                            if rel.get("Type") == NOTES_REL_TYPE:
+                                rels_xml.remove(rel)
+                        dst_zip.writestr(new_rels_name, etree.tostring(
+                            rels_xml, xml_declaration=True, encoding="UTF-8", standalone=True,
+                        ))
 
                     new_slide_targets.append(new_target)
                     new_slide_rids.append(f"rId_slide{new_num}")
@@ -838,8 +851,10 @@ class InvescoreTemplateEngine:
                     ".presentationml.slide+xml"
                 )
                 slide_part_re = re.compile(r"^/ppt/slides/slide\d+\.xml$")
+                notes_part_re = re.compile(r"^/ppt/notesSlides/notesSlide\d+\.xml$")
                 for override in list(ct_xml.findall(f"{{{NS_CT}}}Override")):
-                    if slide_part_re.match(override.get("PartName", "")):
+                    part_name = override.get("PartName", "")
+                    if slide_part_re.match(part_name) or notes_part_re.match(part_name):
                         ct_xml.remove(override)
                 for i in range(len(desired_zippaths)):
                     elem = etree.SubElement(ct_xml, f"{{{NS_CT}}}Override")
