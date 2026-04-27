@@ -264,7 +264,7 @@ export default function HomePage() {
         const eventType  = eventMatch?.[1]?.trim();
         let data: Record<string, unknown> = {};
         if (dataMatch?.[1]?.trim()) {
-          try { data = JSON.parse(dataMatch[1].trim()); } catch { /* ignore */ }
+          try { data = JSON.parse(dataMatch[1].trim()); } catch { console.warn('[SSE] Failed to parse event data:', dataMatch[1].trim()); }
         }
 
         if (eventType === 'building_slide') {
@@ -283,7 +283,7 @@ export default function HomePage() {
             },
           ]);
         } else if (eventType === 'done') {
-          setDownloadArtifactId((data.artifact_id as string) || null);
+          setDownloadArtifactId(typeof data.artifact_id === 'string' && data.artifact_id ? data.artifact_id : null);
           setDownloadToken((data.download_token as string) || '');
           setDownloadFilename((data.filename as string) || 'presentation.pptx');
           setStep('done');

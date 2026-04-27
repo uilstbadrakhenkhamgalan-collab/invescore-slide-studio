@@ -561,7 +561,8 @@ class InvescoreTemplateEngine:
                 raise RuntimeError(stderr or "worker exited with a non-zero status")
 
             stdout = result.stdout.strip()
-            payload = json.loads(stdout.splitlines()[-1] if stdout else "{}")
+            lines = stdout.splitlines()
+            payload = json.loads(lines[-1] if lines else "{}")
 
             if not output_copy or not os.path.exists(output_copy):
                 raise RuntimeError("worker finished without producing an output deck")
@@ -765,6 +766,10 @@ class InvescoreTemplateEngine:
 
             # Get ordered slide rIds from presentation.xml
             sldIdLst = prs_xml.find(f".//{{{NS_PML}}}sldIdLst")
+            if sldIdLst is None:
+                raise ValueError(
+                    "Template PPTX is missing sldIdLst — the file may be corrupt"
+                )
             original_slide_rids = [
                 sldId.get(f"{{{NS_RID}}}id")
                 for sldId in sldIdLst.findall(f"{{{NS_PML}}}sldId")

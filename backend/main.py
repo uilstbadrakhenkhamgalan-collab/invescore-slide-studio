@@ -351,6 +351,8 @@ Return ONLY the Python function — no explanation, no markdown fences."""
         messages=[{"role": "user", "content": user_msg}],
     )
 
+    if not response.content:
+        raise RuntimeError("Builder Agent returned an empty response")
     code = response.content[0].text.strip()
     # Strip markdown fences if present
     code = re.sub(r"^```python\s*", "", code)
@@ -379,6 +381,8 @@ def _run_intake_request(api_key: str, messages: list[dict]) -> str:
         system=INTAKE_SYSTEM_PROMPT,
         messages=messages,
     )
+    if not message.content:
+        raise RuntimeError("Intake Agent returned an empty response")
     return message.content[0].text
 
 
@@ -426,15 +430,14 @@ def _cleanup_expired_artifacts():
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             expires_at = float(meta.get("expires_at", 0))
         except Exception:
-            expires_at = 0
+            continue  # unreadable metadata — leave the artifact alone
 
         artifact_id = meta_path.stem
         file_path = _artifact_file_path(artifact_id)
-        if expires_at and expires_at > current_ts and file_path.exists():
+        if expires_at > current_ts and file_path.exists():
             continue
 
-        if file_path.exists():
-            file_path.unlink()
+        file_path.unlink(missing_ok=True)
         meta_path.unlink(missing_ok=True)
 
 

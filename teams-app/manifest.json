@@ -1,0 +1,37 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "2e093b97-1317-40a0-93fe-108510f44c90",
+  "developer": {
+    "name": "InvesCore Property",
+    "websiteUrl": "https://www.invescoreproperty.mn",
+    "privacyUrl": "https://www.invescoreproperty.mn/privacy",
+    "termsOfUseUrl": "https://www.invescoreproperty.mn/terms"
+  },
+  "name": {
+    "short": "Slide Studio",
+    "full": "InvesCore Slide Studio"
+  },
+  "description": {
+    "short": "Generate branded InvesCore presentations with AI",
+    "full": "InvesCore Slide Studio allows InvesCore Property employees to generate professional, branded PowerPoint presentations by describing what they need in plain language. The AI-powered tool interviews you about your presentation needs, then generates a fully branded .pptx file with InvesCore's exact design system including the navigation bar, confidential badge, section highlighting, and all brand elements."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#C8102E",
+  "staticTabs": [
+    {
+      "entityId": "slide-studio",
+      "name": "Slide Studio",
+      "contentUrl": "https://invescore-slide-studio.vercel.app",
+      "websiteUrl": "https://invescore-slide-studio.vercel.app",
+      "scopes": ["personal"]
+    }
+  ],
+  "validDomains": [
+    "invescore-slide-studio.vercel.app"
+  ]
+}
