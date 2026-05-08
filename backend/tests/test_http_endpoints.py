@@ -4,7 +4,6 @@ verify the input-validation guard rails (size caps, key shape, slide-plan
 shape, CORS allowlist, request-too-large) and the download artifact flow.
 """
 import json
-import os
 
 import pytest
 from fastapi.testclient import TestClient

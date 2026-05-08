@@ -10,7 +10,6 @@ build_content() function as the AI code for one slide and an empty string
 (triggering the fallback path) for another.
 """
 import os
-import sys
 
 import pytest
 from pptx import Presentation

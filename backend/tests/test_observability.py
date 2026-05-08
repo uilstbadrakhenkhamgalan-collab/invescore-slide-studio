@@ -6,7 +6,6 @@ Observability contracts:
 """
 import logging
 
-from fastapi.testclient import TestClient
 
 import main as backend_main
 
