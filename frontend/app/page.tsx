@@ -73,6 +73,10 @@ export default function HomePage() {
   // ── Local history ─────────────────────────────────────────────────────────
   const [history, setHistory] = useState<HistoryEntry[]>([]);
 
+  // ── Abort controllers for in-flight requests ─────────────────────────────
+  const generateAbortRef = useRef<AbortController | null>(null);
+  const intakeAbortRef = useRef<AbortController | null>(null);
+
   const hasApiKey = apiKey.trim().length > 10;
   const isWorking = step === 'interpreting' || step === 'building';
   const canGenerateFromTextarea = hasApiKey && prompt.trim().length > 5 && !isWorking;
@@ -89,17 +93,52 @@ export default function HomePage() {
       const savedHistory = localStorage.getItem('invescore_history');
       if (savedHistory) setHistory(JSON.parse(savedHistory));
     } catch { /* ignore */ }
+    // Recover a pending download if SSE dropped before the previous tab could
+    // download the artifact (network blip, tab close).
+    try {
+      const pending = localStorage.getItem('invescore_pending_download');
+      if (pending) {
+        const p = JSON.parse(pending) as { artifactId: string; token: string; filename: string; expiresAt: number };
+        if (p.expiresAt && p.expiresAt > Date.now()) {
+          setDownloadArtifactId(p.artifactId);
+          setDownloadToken(p.token);
+          setDownloadFilename(p.filename || 'presentation.pptx');
+          setStep('done');
+        } else {
+          localStorage.removeItem('invescore_pending_download');
+        }
+      }
+    } catch { /* ignore */ }
   }, []);
+
+  // Persist pending downloads as soon as we receive them.
+  useEffect(() => {
+    if (downloadArtifactId && downloadToken) {
+      try {
+        localStorage.setItem('invescore_pending_download', JSON.stringify({
+          artifactId: downloadArtifactId,
+          token: downloadToken,
+          filename: downloadFilename,
+          // Backend TTL is 6h; assume 5h client-side to avoid edge races.
+          expiresAt: Date.now() + 5 * 60 * 60 * 1000,
+        }));
+      } catch { /* ignore */ }
+    }
+  }, [downloadArtifactId, downloadToken, downloadFilename]);
 
   // ── Persist API key on change ────────────────────────────────────────────
 
   // ── Intake API call ─────────────────────────────────────────────────────────
   const callIntakeAPI = useCallback(async (messages: ChatMessage[]): Promise<string> => {
     const apiMessages = messages.map(({ role, content }) => ({ role, content }));
+    intakeAbortRef.current?.abort();
+    const controller = new AbortController();
+    intakeAbortRef.current = controller;
     const res = await fetch(`${BACKEND_URL}/api/intake`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ api_key: apiKey.trim(), messages: apiMessages }),
+      signal: controller.signal,
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -207,10 +246,14 @@ export default function HomePage() {
   const doInterpret = useCallback(async (promptOverride?: string): Promise<V2SlidePlan | null> => {
     setStep('interpreting');
     const actualPrompt = promptOverride ?? prompt.trim();
+    generateAbortRef.current?.abort();
+    const controller = new AbortController();
+    generateAbortRef.current = controller;
     const res = await fetch(`${BACKEND_URL}/api/interpret`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ api_key: apiKey.trim(), prompt: actualPrompt }),
+      signal: controller.signal,
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -234,10 +277,14 @@ export default function HomePage() {
     setDownloadToken('');
     setDownloadFilename('presentation.pptx');
 
+    generateAbortRef.current?.abort();
+    const controller = new AbortController();
+    generateAbortRef.current = controller;
     const res = await fetch(`${BACKEND_URL}/api/generate_v2`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ api_key: apiKey.trim(), slide_plan: slidePlan }),
+      signal: controller.signal,
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -334,6 +381,7 @@ export default function HomePage() {
       link.click();
       link.remove();
       window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 0);
+      try { localStorage.removeItem('invescore_pending_download'); } catch { /* ignore */ }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Download failed');
     } finally {
@@ -389,6 +437,8 @@ export default function HomePage() {
   }, [plan, doBuildV2]);
 
   const handleReset = useCallback(() => {
+    generateAbortRef.current?.abort();
+    intakeAbortRef.current?.abort();
     setStep('idle');
     setPlan(null);
     setError(null);
@@ -398,6 +448,7 @@ export default function HomePage() {
     setDownloadToken('');
     setDownloadFilename('presentation.pptx');
     setIsDownloading(false);
+    try { localStorage.removeItem('invescore_pending_download'); } catch { /* ignore */ }
     handleStartOver();
   }, [handleStartOver]);
 

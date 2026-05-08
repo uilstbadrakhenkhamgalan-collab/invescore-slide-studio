@@ -12,7 +12,13 @@ frontend/.env.local
 # Temp / test outputs
 training/test_output*.pptx
 training/assets/
+backend/tmp/
+backend/phase1_test_output.pptx
 *.tmp
+
+# pytest
+.pytest_cache/
+.ruff_cache/
 
 # Helper scripts (not needed in prod)
 extract_template.py

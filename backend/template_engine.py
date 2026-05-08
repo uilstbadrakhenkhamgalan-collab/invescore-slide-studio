@@ -4,14 +4,15 @@ Hybrid approach:
   - Clone-based for opening / agenda / section_divider / closing
   - Blank-slide + brand-frame + AI-generated python-pptx for content slides
 """
+import ast
 import json
+import logging
 import os
 import copy
 import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import traceback
 import zipfile
 import re
@@ -21,6 +22,8 @@ from pptx import Presentation
 from pptx.util import Pt, Inches, Emu
 from pptx.oxml.ns import qn
 from pptx.dml.color import RGBColor
+
+logger = logging.getLogger("invescore.engine")
 
 
 # â”€â”€ XML namespaces â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -63,26 +66,30 @@ CONTENT_AREA_BOUNDS = {
 
 # â”€â”€ Code-execution safety â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-_BLOCKED_IMPORTS = frozenset([
-    "os", "sys", "subprocess", "requests", "socket", "shutil", "pathlib",
-    "io", "http", "urllib", "tempfile", "glob", "importlib", "builtins",
-    "pickle", "ctypes", "multiprocessing", "threading", "ftplib", "smtplib",
-    "zipfile", "tarfile", "sqlite3", "dbm", "shelve", "signal", "pty",
-])
-
-_BLOCKED_TOKENS = [
-    "exec(",    "eval(",    "__import__(", "open(",    "compile(",
-    "__builtins__", "globals(", "locals(",  "vars(",   "breakpoint(",
-]
-
 # Only these top-level module families are allowed inside build_content().
 _ALLOWED_MODULES = frozenset([
     "pptx", "math", "datetime", "random", "itertools",
     "collections", "decimal", "fractions", "statistics", "functools",
 ])
 
-_EXEC_TIMEOUT_SEC = 10
-_WORKER_TIMEOUT_SEC = 20
+# Dunder names that enable sandbox-escape walks (e.g., ().__class__.__bases__[0].__subclasses__()).
+# Matched against any AST attribute access or name reference.
+_BLOCKED_NAMES = frozenset([
+    "__class__", "__bases__", "__base__", "__subclasses__", "__mro__",
+    "__dict__", "__globals__", "__builtins__", "__import__", "__loader__",
+    "__spec__", "__code__", "__closure__", "__func__", "__self__",
+    "__getattribute__", "__getattr__", "__setattr__", "__delattr__",
+    "__reduce__", "__reduce_ex__", "__class_getitem__",
+    "exec", "eval", "compile", "open", "globals", "locals", "vars",
+    "breakpoint", "input", "exit", "quit", "help",
+    "getattr",  # walking via getattr() defeats AST checks
+    "setattr", "delattr", "hasattr",
+])
+
+# Subprocess-enforced wall-clock for the per-slide worker. The inner thread
+# timeout was removed because daemon threads are not killable in Python and
+# leaked mutations after rollback (race observed in builder code that crashed).
+_WORKER_TIMEOUT_SEC = 30
 _WORKER_SCRIPT_PATH = Path(__file__).with_name("slide_builder_worker.py")
 
 
@@ -90,12 +97,24 @@ _WORKER_SCRIPT_PATH = Path(__file__).with_name("slide_builder_worker.py")
 
 class InvescoreTemplateEngine:
 
+    # Required brand-guide categories for V2 generation.
+    _REQUIRED_CATEGORIES = (
+        "opening", "agenda", "section_divider", "content_text", "ending",
+    )
+
     def __init__(self, template_path: str, brand_guide_path: str):
         self.template_path = template_path
         self.brand_guide_path = brand_guide_path
         with open(brand_guide_path, encoding="utf-8") as f:
             self.brand = json.load(f)
         self.category_map = {s["category"]: s for s in self.brand["slides"]}
+
+        missing = [c for c in self._REQUIRED_CATEGORIES if c not in self.category_map]
+        if missing:
+            raise ValueError(
+                f"brand_guide.json missing required categories: {missing}. "
+                f"Available: {list(self.category_map)}"
+            )
 
     # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # V1 Public API  (unchanged â€” used by existing /api/generate endpoint)
@@ -226,14 +245,13 @@ class InvescoreTemplateEngine:
             slide_label = f"slide={page_number} section='{section_name}' title='{slide_title}'"
             last_slide_label = slide_label
 
-            print(f"[engine] Preparing {slide_label} type=section_divider")
+            logger.debug("preparing %s type=section_divider", slide_label)
             self._apply_content(slide, "section_divider", {
                 "section_title":       slide_spec.get("title", section_name),
                 "section_description": "",  # description is internal AI guidance only
             })
-            print(f"[engine] Section divider applied â€” {slide_label}")
 
-        print(f"[engine] Saving structural slides to {output_path}")
+        logger.debug("saving structural slides to %s", output_path)
         prs.save(output_path)
 
         warnings: list[dict] = []
@@ -252,10 +270,7 @@ class InvescoreTemplateEngine:
             last_slide_label = slide_label
             code = content_code_map.get(current_builder_idx, "")
 
-            print(
-                f"[engine] Rendering {slide_label} "
-                f"builder_idx={current_builder_idx}"
-            )
+            logger.debug("rendering %s builder_idx=%s", slide_label, current_builder_idx)
 
             warning = self._apply_content_slide_with_worker(
                 presentation_path=output_path,
@@ -276,14 +291,16 @@ class InvescoreTemplateEngine:
                     "message": warning,
                 })
 
-        print(f"[engine] Validating saved .pptx...")
+        logger.debug("validating saved pptx")
         try:
             test_prs = Presentation(output_path)
             slide_count = len(test_prs.slides)
-            print(f"[engine] Validation OK â€” {slide_count} slides readable")
+            logger.info("validation ok slides=%d", slide_count)
         except Exception as val_exc:
-            print(f"[engine] VALIDATION FAILED â€” last slide was: {last_slide_label}")
-            print(f"[engine] Validation error: {val_exc}")
+            logger.error(
+                "validation failed last_slide=%s error=%s",
+                last_slide_label, val_exc,
+            )
             raise RuntimeError(
                 f"Generated .pptx is corrupt (failed to re-open): {val_exc}. "
                 f"Last slide processed: {last_slide_label}"
@@ -500,17 +517,17 @@ class InvescoreTemplateEngine:
         if code:
             success = self._execute_content_code(slide, code, slide_label)
             if success:
-                print(f"[engine] Content built successfully for {slide_label}")
+                logger.debug("content built %s", slide_label)
                 return None
 
-            print(f"[engine] Using fallback title for {slide_label}")
+            logger.warning("using fallback title %s reason=execution_or_validation_failed", slide_label)
             self._add_fallback_title(slide, slide_title)
             return (
                 "AI content rendering failed validation or execution. "
                 "A fallback title slide was used."
             )
 
-        print(f"[engine] No builder code available â€” using fallback title for {slide_label}")
+        logger.warning("using fallback title %s reason=no_builder_code", slide_label)
         self._add_fallback_title(slide, slide_title)
         return "No builder code was available for this slide. A fallback title slide was used."
 
@@ -531,7 +548,7 @@ class InvescoreTemplateEngine:
         self._prepare_content_slide(slide, section_name, all_sections, page_number)
         self._add_fallback_title(slide, slide_title)
         prs.save(presentation_path)
-        print(f"[engine] Worker failed â€” fallback title saved for {slide_label}")
+        logger.warning("worker failed — fallback title saved %s", slide_label)
 
     def _apply_content_slide_with_worker(
         self,
@@ -613,7 +630,7 @@ class InvescoreTemplateEngine:
             return "Isolated content worker timed out. A fallback title slide was used."
 
         except Exception as exc:
-            print(f"[engine] Worker failed for {slide_label}: {exc}")
+            logger.warning("worker subprocess failed %s err=%s", slide_label, exc)
             self._apply_fallback_content_to_file(
                 presentation_path=presentation_path,
                 slide_index=slide_index,
@@ -640,19 +657,61 @@ class InvescoreTemplateEngine:
 
     def _validate_code(self, code: str) -> tuple[bool, str]:
         """
-        Static analysis of AI-generated code for dangerous patterns.
+        AST-based static analysis of AI-generated code.
+
+        Hardens against the classic Python sandbox escape:
+            ().__class__.__bases__[0].__subclasses__() -> subprocess.Popen
+        by rejecting any reference to dunder attributes / dangerous builtins
+        regardless of how they are spelled (attribute access, getattr, etc.).
+
+        Also rejects:
+          - syntax errors (would raise during exec)
+          - imports outside _ALLOWED_MODULES
+          - missing or duplicated `def build_content` at top level
+
         Returns (is_safe, reason_if_rejected).
         """
-        for mod in _BLOCKED_IMPORTS:
-            if (
-                f"import {mod}" in code
-                or f"from {mod} " in code
-                or f"from {mod}." in code
-            ):
-                return False, f"blocked import: {mod}"
-        for token in _BLOCKED_TOKENS:
-            if token in code:
-                return False, f"blocked token: {token!r}"
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as exc:
+            return False, f"syntax error: {exc.msg} (line {exc.lineno})"
+
+        # Require exactly one top-level `def build_content(...)`.
+        top_level_funcs = [
+            node for node in tree.body if isinstance(node, ast.FunctionDef)
+        ]
+        build_fns = [fn for fn in top_level_funcs if fn.name == "build_content"]
+        if not build_fns:
+            return False, "missing top-level `def build_content` function"
+        if len(build_fns) > 1:
+            return False, "multiple `def build_content` definitions"
+
+        for node in ast.walk(tree):
+            # Block dunder + dangerous builtin name references everywhere.
+            # Catches `().__class__`, `getattr(x, "__subclasses__")`, etc.
+            if isinstance(node, ast.Attribute) and node.attr in _BLOCKED_NAMES:
+                return False, f"blocked attribute access: .{node.attr}"
+            if isinstance(node, ast.Name) and node.id in _BLOCKED_NAMES:
+                return False, f"blocked name reference: {node.id}"
+
+            # Reject string literals that look like dunder selectors — they
+            # are unnecessary for legitimate slide code and the only reason
+            # to use them is to bypass attribute checks via getattr().
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if node.value in _BLOCKED_NAMES:
+                    return False, f"blocked string literal: {node.value!r}"
+
+            # Constrain imports to the allow-list (top of module families).
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    top = alias.name.split(".")[0]
+                    if top not in _ALLOWED_MODULES:
+                        return False, f"blocked import: {alias.name}"
+            if isinstance(node, ast.ImportFrom):
+                top = (node.module or "").split(".")[0]
+                if top not in _ALLOWED_MODULES:
+                    return False, f"blocked import-from: {node.module}"
+
         return True, ""
 
     def _execute_content_code(self, slide, code_string: str, slide_label: str = "") -> bool:
@@ -663,25 +722,26 @@ class InvescoreTemplateEngine:
             def build_content(slide, Inches, Pt, Emu, RGBColor): ...
 
         Safety layers:
-        1. Static validation â€” blocked imports / tokens
-        2. Restricted __import__ â€” only pptx, math, datetime, etc.
-        3. Restricted builtins â€” no open(), exec(), eval(), globals()â€¦
-        4. Threading timeout â€” 10 s hard limit per slide
-        5. Rollback â€” any shapes added before a crash are removed
-        6. XML sanity check â€” slide XML must be serialisable after exec
+        1. AST validation — rejects dunder access, blocked names, bad imports
+        2. Restricted __import__ — only pptx, math, datetime, etc.
+        3. Stripped builtins — no open(), exec(), eval(), globals(), getattr()
+        4. Wall-clock — enforced by the parent worker subprocess (no in-thread
+           timer; daemon threads are not killable and produced races)
+        5. Rollback — shapes mutated before a crash are restored from snapshot
+        6. XML sanity check — slide XML must round-trip through lxml after exec
 
-        Returns True on success, False on any rejection / error / timeout.
+        Returns True on success, False on any rejection / error.
         """
         prefix = f"[builder{' ' + slide_label if slide_label else ''}]"
 
-        # â”€â”€ Static validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Static validation ──────────────────────────────────────────────
         is_safe, reason = self._validate_code(code_string)
         if not is_safe:
-            print(f"{prefix} VALIDATION FAILED â€” {reason}")
-            print(f"{prefix} Rejected code (first 500 chars): {code_string[:500]}")
+            logger.warning("%s validation failed reason=%s", prefix, reason)
+            logger.debug("%s rejected code (first 500 chars): %s", prefix, code_string[:500])
             return False
 
-        # â”€â”€ Snapshot existing shape elements for rollback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Snapshot for rollback ──────────────────────────────────────────
         sp_tree = slide.shapes._spTree
         snapshot = copy.deepcopy(sp_tree)
 
@@ -691,9 +751,6 @@ class InvescoreTemplateEngine:
             for child in list(snapshot):
                 sp_tree.append(copy.deepcopy(child))
 
-        result     = [False]
-        exc_holder = [None]
-
         def _safe_import(name, *args, **kwargs):
             top = name.split(".")[0]
             if top not in _ALLOWED_MODULES:
@@ -702,68 +759,47 @@ class InvescoreTemplateEngine:
                 )
             return __import__(name, *args, **kwargs)
 
-        def _run():
-            try:
-                safe_builtins = {
-                    # Arithmetic / iteration
-                    "range": range, "len": len, "str": str, "int": int,
-                    "float": float, "list": list, "dict": dict, "tuple": tuple,
-                    "bool": bool, "set": set, "frozenset": frozenset,
-                    "enumerate": enumerate, "zip": zip, "map": map,
-                    "filter": filter, "round": round, "max": max, "min": min,
-                    "abs": abs, "sum": sum, "sorted": sorted,
-                    "reversed": reversed, "any": any, "all": all,
-                    # Light inspection helpers for defensive code paths
-                    "isinstance": isinstance,
-                    "getattr": getattr,
-                    # Constants
-                    "True": True, "False": False, "None": None,
-                    # Controlled import gateway
-                    "__import__": _safe_import,
-                }
-                namespace = {"__builtins__": safe_builtins}
-                exec(code_string, namespace)   # noqa: S102
-                build_fn = namespace.get("build_content")
-                if build_fn is None:
-                    print(f"{prefix} No build_content function found in code")
-                    return
-                build_fn(slide, Inches, Pt, Emu, RGBColor)
-                result[0] = True
-            except Exception as exc:
-                exc_holder[0] = exc
+        # Pinned safe builtins. NOTE: getattr/setattr/hasattr intentionally
+        # excluded — they enable AST-bypass attacks via string literals.
+        safe_builtins = {
+            "range": range, "len": len, "str": str, "int": int,
+            "float": float, "list": list, "dict": dict, "tuple": tuple,
+            "bool": bool, "set": set, "frozenset": frozenset,
+            "enumerate": enumerate, "zip": zip, "map": map,
+            "filter": filter, "round": round, "max": max, "min": min,
+            "abs": abs, "sum": sum, "sorted": sorted,
+            "reversed": reversed, "any": any, "all": all,
+            "isinstance": isinstance,
+            "True": True, "False": False, "None": None,
+            "__import__": _safe_import,
+        }
 
-        thread = threading.Thread(target=_run, daemon=True)
-        thread.start()
-        thread.join(timeout=_EXEC_TIMEOUT_SEC)
-
-        if thread.is_alive():
-            print(f"{prefix} TIMED OUT after {_EXEC_TIMEOUT_SEC}s â€” rolling back and using fallback title")
+        try:
+            namespace = {"__builtins__": safe_builtins}
+            exec(code_string, namespace)   # noqa: S102 — sandboxed via _validate_code
+            build_fn = namespace.get("build_content")
+            if build_fn is None:
+                # _validate_code requires the function; this is defensive.
+                logger.warning("%s no build_content function after exec", prefix)
+                return False
+            build_fn(slide, Inches, Pt, Emu, RGBColor)
+        except Exception as exc:
+            tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            logger.warning("%s execution failed type=%s msg=%s", prefix, type(exc).__name__, exc)
+            logger.debug("%s traceback:\n%s", prefix, tb)
             _restore_snapshot()
             return False
 
-        if exc_holder[0]:
-            exc = exc_holder[0]
-            print(f"{prefix} EXECUTION FAILED:")
-            print(f"{prefix}   {type(exc).__name__}: {exc}")
-            print(f"{prefix}   Traceback:")
-            tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
-            for line in tb_lines:
-                for subline in line.splitlines():
-                    print(f"{prefix}     {subline}")
-            _restore_snapshot()
-            print(f"{prefix}   Rolled back to pre-execution snapshot")
-            return False
-
-        # â”€â”€ XML sanity check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── XML sanity check ───────────────────────────────────────────────
         try:
             etree.tostring(slide._element)
-            print(f"{prefix} Execution OK â€” XML sanity check passed")
+            logger.debug("%s execution ok", prefix)
         except Exception as xml_exc:
-            print(f"{prefix} XML SANITY CHECK FAILED after execution: {xml_exc}")
+            logger.warning("%s xml sanity check failed err=%s", prefix, xml_exc)
             _restore_snapshot()
             return False
 
-        return result[0]
+        return True
 
     # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     # ZIP-level slide builder  (unchanged from v2 â€” handles clone logic)
