@@ -1,6 +1,39 @@
-@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600&family=JetBrains+Mono:wght@400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Montserrat:wght@300;400;500;600&family=JetBrains+Mono:wght@400&display=swap');
 @import "tailwindcss";
 
+/* ───────────────────────────────────────────────────────────────────────────
+   Design tokens
+   ─────────────────────────────────────────────────────────────────────────── */
+:root {
+  --bg-primary:    #09090B;
+  --bg-secondary:  #18181B;
+  --bg-tertiary:   #27272A;
+  --bg-card:       rgba(255, 255, 255, 0.03);
+
+  --text-primary:   #FAFAFA;
+  --text-secondary: #A1A1AA;
+  --text-tertiary:  #71717A;
+
+  --accent:       #C8102E;
+  --accent-hover: #E11D48;
+  --accent-glow:  rgba(200, 16, 46, 0.15);
+
+  --border:       rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(255, 255, 255, 0.12);
+
+  --green-ok: #22C55E;
+
+  --t-fast:   200ms ease;
+  --t-medium: 250ms ease;
+
+  --font-body:  'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-brand: 'Montserrat', 'Inter', sans-serif;
+  --font-mono:  'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Reset
+   ─────────────────────────────────────────────────────────────────────────── */
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -8,40 +41,113 @@
 }
 
 html {
-  background: #FAFAFA;
-  color: #1A1A1A;
-  font-family: 'Montserrat', sans-serif;
-  scrollbar-width: thin;
-  scrollbar-color: #E0E0E0 #FAFAFA;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 body {
-  background: #FAFAFA;
+  background: var(--bg-primary);
   min-height: 100vh;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-body);
+  font-weight: 400;
+  color: var(--text-primary);
+  overflow-x: hidden;
 }
 
-::-webkit-scrollbar {
-  width: 4px;
+/* ───────────────────────────────────────────────────────────────────────────
+   Subtle SVG noise overlay over the entire viewport
+   Inline data-URI so there's zero extra request.
+   ─────────────────────────────────────────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  background-size: 200px 200px;
+  mix-blend-mode: overlay;
 }
-::-webkit-scrollbar-track {
-  background: #FAFAFA;
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Scrollbar — thin, visible only on hover
+   ─────────────────────────────────────────────────────────────────────────── */
+* {
+  scrollbar-width: none;
 }
-::-webkit-scrollbar-thumb {
-  background: #E0E0E0;
+*:hover {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-tertiary) transparent;
+}
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+*:hover::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--text-tertiary);
   border-radius: 0;
 }
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
 
+/* ───────────────────────────────────────────────────────────────────────────
+   Selection
+   ─────────────────────────────────────────────────────────────────────────── */
 ::selection {
-  background: rgba(200, 16, 46, 0.15);
+  background: var(--accent-glow);
+  color: var(--text-primary);
 }
 
+/* ───────────────────────────────────────────────────────────────────────────
+   Form base
+   ─────────────────────────────────────────────────────────────────────────── */
 input, textarea, button {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-body);
   outline: none;
+  background: transparent;
+  border: none;
+  color: inherit;
 }
 
+button {
+  cursor: pointer;
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Animations
+   ─────────────────────────────────────────────────────────────────────────── */
 @keyframes fade-in {
   from { opacity: 0; }
-  to { opacity: 1; }
+  to   { opacity: 1; }
+}
+
+@keyframes enter-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes ken-burns {
+  0%   { transform: scale(1.0); }
+  100% { transform: scale(1.03); }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.85); }
 }
