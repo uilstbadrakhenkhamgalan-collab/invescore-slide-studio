@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "InvesCore Slide Studio",
-  description: "Generate branded InvesCore Property presentations with AI",
+  description: "AI-generated, on-brand presentations for InvesCore Property",
 };
 
 export default function RootLayout({
@@ -12,14 +12,20 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" style={{ background: '#0C0F1A' }}>
+    <html lang="en" style={{ background: '#09090B' }}>
       <head>
-        <link
-          href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap"
-          rel="stylesheet"
-        />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
       </head>
-      <body style={{ fontFamily: "'Montserrat', sans-serif", background: '#0C0F1A', minHeight: '100vh' }}>
+      <body
+        style={{
+          fontFamily:
+            "'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif",
+          background: '#09090B',
+          minHeight: '100vh',
+          color: '#FAFAFA',
+        }}
+      >
         {children}
       </body>
     </html>
